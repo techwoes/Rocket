@@ -268,11 +268,12 @@ impl<'r> ResponseBuilder<'r> {
     ///
     /// ```rust
     /// use rocket::Response;
-    /// use rocket::http::hyper::header::Accept;
+    /// use rocket::http::Header;
+    /// use rocket::http::hyper::header::ACCEPT;
     ///
     /// let response = Response::build()
-    ///     .header_adjoin(Accept::json())
-    ///     .header_adjoin(Accept::text())
+    ///     .header_adjoin(Header::new(ACCEPT.as_str(), "application/json"))
+    ///     .header_adjoin(Header::new(ACCEPT.as_str(), "text/plain"))
     ///     .finalize();
     ///
     /// assert_eq!(response.headers().get("Accept").count(), 2);
@@ -814,15 +815,16 @@ impl<'r> Response<'r> {
     ///
     /// ```rust
     /// use rocket::Response;
-    /// use rocket::http::hyper::header::Accept;
+    /// use rocket::http::Header;
+    /// use rocket::http::hyper::header::ACCEPT;
     ///
     /// let mut response = Response::new();
-    /// response.adjoin_header(Accept::json());
-    /// response.adjoin_header(Accept::text());
+    /// response.adjoin_header(Header::new(ACCEPT.as_str(), "application/json"));
+    /// response.adjoin_header(Header::new(ACCEPT.as_str(), "text/plain"));
     ///
     /// let mut accept_headers = response.headers().iter();
-    /// assert_eq!(accept_headers.next(), Some(Accept::json().into()));
-    /// assert_eq!(accept_headers.next(), Some(Accept::text().into()));
+    /// assert_eq!(accept_headers.next(), Some(Header::new(ACCEPT.as_str(), "application/json")));
+    /// assert_eq!(accept_headers.next(), Some(Header::new(ACCEPT.as_str(), "text/plain")));
     /// assert_eq!(accept_headers.next(), None);
     /// ```
     #[inline(always)]
