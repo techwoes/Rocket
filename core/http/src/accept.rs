@@ -88,17 +88,17 @@ pub enum AcceptParams {
     Dynamic(SmallVec<[QMediaType; 1]>)
 }
 
-impl pear::parsers::Collection for AcceptParams {
-    type Item = QMediaType;
-
-    fn new() -> Self {
+impl Default for AcceptParams {
+    fn default() -> Self {
         AcceptParams::Dynamic(SmallVec::new())
     }
+}
 
-    fn add(&mut self, item: Self::Item) {
-        match *self {
+impl Extend<QMediaType> for AcceptParams {
+    fn extend<T: IntoIterator<Item = QMediaType>>(&mut self, iter: T) {
+        match self {
             AcceptParams::Static(..) => panic!("can't add to static collection!"),
-            AcceptParams::Dynamic(ref mut v) => v.push(item)
+            AcceptParams::Dynamic(ref mut v) => v.extend(iter)
         }
     }
 }
@@ -130,7 +130,7 @@ impl PartialEq for AcceptParams {
 /// [`Request::accept()`] method. The [`preferred()`] method can be used to
 /// retrieve the client's preferred media type.
 ///
-/// [`Request::accept`]: rocket::Request::accept()
+/// [`Request::accept()`]: rocket::Request::accept()
 /// [`preferred()`]: Accept::preferred()
 ///
 /// An `Accept` type with a single, common media type can be easily constructed
@@ -158,11 +158,10 @@ impl PartialEq for AcceptParams {
 /// use rocket::http::Accept;
 /// use rocket::response::Response;
 ///
-/// # #[allow(unused_variables)]
 /// let response = Response::build().header(Accept::JSON).finalize();
 /// ```
 #[derive(Debug, Clone, PartialEq)]
-pub struct Accept(crate AcceptParams);
+pub struct Accept(pub(crate) AcceptParams);
 
 macro_rules! accept_constructor {
     ($($name:ident ($check:ident): $str:expr, $t:expr,

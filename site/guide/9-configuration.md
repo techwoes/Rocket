@@ -92,9 +92,9 @@ limits = { forms = 32768 }
 The `workers` and `secret_key` default parameters are computed by Rocket
 automatically; the values above are not valid TOML syntax. When manually
 specifying the number of workers, the value should be an integer: `workers =
-10`. When manually specifying the secret key, the value should a 256-bit base64
-encoded string. Such a string can be generated using a tool such as openssl:
-`openssl rand -base64 32`.
+10`. When manually specifying the secret key, the value should a random 256-bit
+value, encoded as a base64 or base16 string. Such a string can be generated
+using a tool like openssl: `openssl rand -base64 32`.
 
 The "global" pseudo-environment can be used to set and/or override configuration
 parameters globally. A parameter defined in a `[global]` table sets, or
@@ -102,7 +102,7 @@ overrides if already present, that parameter in every environment. For example,
 given the following `Rocket.toml` file, the value of `address` will be
 `"1.2.3.4"` in every environment:
 
-```
+```toml
 [global]
 address = "1.2.3.4"
 
@@ -185,29 +185,37 @@ assets_dir = "prod_assets/"
 The following code will:
 
   1. Read the configuration parameter in an ad-hoc `attach` fairing.
-  2. Store the parsed parameter in an `AssertsDir` structure in managed state.
+  2. Store the parsed parameter in an `AssetsDir` structure in managed state.
   3. Retrieve the parameter in an `assets` route via the `State` guard.
 
 ```rust
+# #[macro_use] extern crate rocket;
+
+use std::path::{Path, PathBuf};
+
+use rocket::State;
+use rocket::response::NamedFile;
+use rocket::fairing::AdHoc;
+
 struct AssetsDir(String);
 
 #[get("/<asset..>")]
-fn assets(asset: PathBuf, assets_dir: State<AssetsDir>) -> Option<NamedFile> {
-    NamedFile::open(Path::new(&assets_dir.0).join(asset)).ok()
+async fn assets(asset: PathBuf, assets_dir: State<'_, AssetsDir>) -> Option<NamedFile> {
+    NamedFile::open(Path::new(&assets_dir.0).join(asset)).await.ok()
 }
 
-fn main() {
+#[launch]
+fn rocket() -> rocket::Rocket {
     rocket::ignite()
         .mount("/", routes![assets])
-        .attach(AdHoc::on_attach("Assets Config", |rocket| {
-            let assets_dir = rocket.config()
+        .attach(AdHoc::on_attach("Assets Config", |mut rocket| async {
+            let assets_dir = rocket.config().await
                 .get_str("assets_dir")
                 .unwrap_or("assets/")
                 .to_string();
 
             Ok(rocket.manage(AssetsDir(assets_dir)))
         }))
-        .launch();
 }
 ```
 
@@ -247,16 +255,25 @@ In addition to using environment variables or a config file, Rocket can also be
 configured using the [`rocket::custom()`] method and [`ConfigBuilder`]:
 
 ```rust
+# #[macro_use] extern crate rocket;
+
 use rocket::config::{Config, Environment};
 
+# fn build_config() -> rocket::config::Result<Config> {
 let config = Config::build(Environment::Staging)
     .address("1.2.3.4")
     .port(9234)
     .finalize()?;
+# Ok(config)
+# }
 
+# let config = build_config().expect("config okay");
+# /*
 rocket::custom(config)
-    .mount(..)
-    .launch();
+    .mount("/", routes![/* .. */])
+    .launch()
+    .await;
+# */
 ```
 
 Configuration via `rocket::custom()` replaces calls to `rocket::ignite()` and
@@ -277,7 +294,7 @@ Security). In order for TLS support to be enabled, Rocket must be compiled with
 the `"tls"` feature. To do this, add the `"tls"` feature to the `rocket`
 dependency in your `Cargo.toml` file:
 
-```
+```toml
 [dependencies]
 rocket = { version = "0.5.0-dev", features = ["tls"] }
 ```
@@ -291,7 +308,7 @@ must be a table with two keys:
 
 The recommended way to specify these parameters is via the `global` environment:
 
-```
+```toml
 [global.tls]
 certs = "/path/to/certs.pem"
 key = "/path/to/key.pem"
@@ -299,7 +316,7 @@ key = "/path/to/key.pem"
 
 Of course, you can always specify the configuration values per environment:
 
-```
+```toml
 [development]
 tls = { certs = "/path/to/certs.pem", key = "/path/to/key.pem" }
 ```

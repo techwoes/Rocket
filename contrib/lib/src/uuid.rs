@@ -1,6 +1,6 @@
 //! UUID parameter and form value parsing support.
 //!
-//! See the [`Uuid`](uuid::Uuid) type for further details.
+//! See the [`Uuid`] type for further details.
 //!
 //! # Enabling
 //!
@@ -23,7 +23,7 @@ use std::ops::Deref;
 use rocket::request::{FromParam, FromFormValue};
 use rocket::http::RawStr;
 
-pub use self::uuid_crate::parser::ParseError;
+type ParseError = <self::uuid_crate::Uuid as FromStr>::Err;
 
 /// Implements [`FromParam`] and [`FromFormValue`] for accepting UUID values.
 ///
@@ -42,7 +42,6 @@ pub use self::uuid_crate::parser::ParseError;
 /// You can use the `Uuid` type directly as a target of a dynamic parameter:
 ///
 /// ```rust
-/// # #![feature(proc_macro_hygiene)]
 /// # #[macro_use] extern crate rocket;
 /// # #[macro_use] extern crate rocket_contrib;
 /// use rocket_contrib::uuid::Uuid;
@@ -56,7 +55,6 @@ pub use self::uuid_crate::parser::ParseError;
 /// You can also use the `Uuid` as a form value, including in query strings:
 ///
 /// ```rust
-/// # #![feature(proc_macro_hygiene)]
 /// # #[macro_use] extern crate rocket;
 /// # #[macro_use] extern crate rocket_contrib;
 /// use rocket_contrib::uuid::Uuid;

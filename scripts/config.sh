@@ -23,10 +23,33 @@ function relative() {
   fi
 }
 
-# Full and major version of Rocket
-ROCKET_VERSION="0.5.0-dev"
-ROCKET_MAJOR_VERSION=$(echo "${ROCKET_VERSION}" | cut -d'.' -f1-2)
+function future_date() {
+  local days_in_future=`[[ -z "$1" ]] && echo "0" || echo "$1"`
+  if date -v+1d +%Y-%m-%d > /dev/null 2>&1; then
+    echo $(date -v+${days_in_future}d +%Y-%m-%d)
+  elif date -d "+1 day" > /dev/null 2>&1; then
+    echo $(date '+%Y-%m-%d' -d "+${days_in_future} days")
+  else
+    echo "Error: need a 'date' cmd that accepts -v (BSD) or -d (GNU)"
+    exit 1
+  fi
+}
+
+# Versioning information. These are toggled as versions change.
 CURRENT_RELEASE=false
+PRE_RELEASE=true
+
+# A generated codename for this version. Use the git branch for pre-releases.
+case $PRE_RELEASE in
+  true)
+    VERSION_CODENAME="$(git branch --show-current)"
+    ROCKET_VERSION="${VERSION_CODENAME}-$(future_date)"
+    ;;
+  false)
+    ROCKET_VERSION="0.5.0-dev"
+    VERSION_CODENAME="$(echo "v${ROCKET_VERSION}" | cut -d'.' -f1-2)"
+    ;;
+esac
 
 # Root of workspace-like directories.
 PROJECT_ROOT=$(relative "") || exit $?
@@ -53,21 +76,27 @@ ALL_PROJECT_DIRS=(
     "${CONTRIB_LIB_ROOT}"
 )
 
+function print_environment() {
+  echo "  ROCKET_VERSION: ${ROCKET_VERSION}"
+  echo "  CURRENT_RELEASE: ${CURRENT_RELEASE}"
+  echo "  PRE_RELEASE: ${PRE_RELEASE}"
+  echo "  VERSION_CODENAME: ${VERSION_CODENAME}"
+  echo "  SCRIPT_DIR: ${SCRIPT_DIR}"
+  echo "  PROJECT_ROOT: ${PROJECT_ROOT}"
+  echo "  CORE_ROOT: ${CORE_ROOT}"
+  echo "  CONTRIB_ROOT: ${CONTRIB_ROOT}"
+  echo "  SITE_ROOT: ${SITE_ROOT}"
+  echo "  CORE_LIB_ROOT: ${CORE_LIB_ROOT}"
+  echo "  CORE_CODEGEN_ROOT: ${CORE_CODEGEN_ROOT}"
+  echo "  CORE_HTTP_ROOT: ${CORE_HTTP_ROOT}"
+  echo "  CONTRIB_LIB_ROOT: ${CONTRIB_LIB_ROOT}"
+  echo "  CONTRIB_CODEGEN_ROOT: ${CONTRIB_CODEGEN_ROOT}"
+  echo "  EXAMPLES_DIR: ${EXAMPLES_DIR}"
+  echo "  DOC_DIR: ${DOC_DIR}"
+  echo "  ALL_PROJECT_DIRS: ${ALL_PROJECT_DIRS[*]}"
+  echo "  date(): $(future_date)"
+}
+
 if [ "${1}" = "-p" ]; then
-  echo "ROCKET_VERSION: ${ROCKET_VERSION}"
-  echo "ROCKET_MAJOR_VERSION: ${ROCKET_MAJOR_VERSION}"
-  echo "CURRENT_RELEASE: ${CURRENT_RELEASE}"
-  echo "SCRIPT_DIR: ${SCRIPT_DIR}"
-  echo "PROJECT_ROOT: ${PROJECT_ROOT}"
-  echo "CORE_ROOT: ${CORE_ROOT}"
-  echo "CONTRIB_ROOT: ${CONTRIB_ROOT}"
-  echo "SITE_ROOT: ${SITE_ROOT}"
-  echo "CORE_LIB_ROOT: ${CORE_LIB_ROOT}"
-  echo "CORE_CODEGEN_ROOT: ${CORE_CODEGEN_ROOT}"
-  echo "CORE_HTTP_ROOT: ${CORE_HTTP_ROOT}"
-  echo "CONTRIB_LIB_ROOT: ${CONTRIB_LIB_ROOT}"
-  echo "CONTRIB_CODEGEN_ROOT: ${CONTRIB_CODEGEN_ROOT}"
-  echo "EXAMPLES_DIR: ${EXAMPLES_DIR}"
-  echo "DOC_DIR: ${DOC_DIR}"
-  echo "ALL_PROJECT_DIRS: ${ALL_PROJECT_DIRS[*]}"
+  print_environment
 fi

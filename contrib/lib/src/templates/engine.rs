@@ -7,7 +7,7 @@ use crate::templates::TemplateInfo;
 #[cfg(feature = "tera_templates")] use crate::templates::tera::Tera;
 #[cfg(feature = "handlebars_templates")] use crate::templates::handlebars::Handlebars;
 
-crate trait Engine: Send + Sync + 'static {
+pub(crate) trait Engine: Send + Sync + 'static {
     const EXT: &'static str;
 
     fn init(templates: &[(&str, &TemplateInfo)]) -> Option<Self> where Self: Sized;
@@ -30,15 +30,21 @@ crate trait Engine: Send + Sync + 'static {
 /// use rocket_contrib::templates::{Template, Engines};
 /// use rocket_contrib::templates::tera::{self, Value};
 ///
-/// fn my_filter(value: Value, _: HashMap<String, Value>) -> tera::Result<Value> {
+/// fn my_filter(value: &Value, _: &HashMap<String, Value>) -> tera::Result<Value> {
 ///     # /*
 ///     ...
 ///     # */ unimplemented!();
 /// }
 ///
-/// Template::custom(|engines: &mut Engines| {
-///     engines.tera.register_filter("my_filter", my_filter);
-/// });
+/// fn main() {
+///     rocket::ignite()
+///         // ...
+///         .attach(Template::custom(|engines: &mut Engines| {
+///             engines.tera.register_filter("my_filter", my_filter);
+///         }))
+///         // ...
+///         # ;
+/// }
 /// # }
 /// ```
 ///
@@ -56,16 +62,16 @@ pub struct Engines {
     /// `Tera` instance, ensure you use types imported from
     /// `rocket_contrib::templates::handlebars` to avoid version mismatches.
     #[cfg(feature = "handlebars_templates")]
-    pub handlebars: Handlebars,
+    pub handlebars: Handlebars<'static>,
 }
 
 impl Engines {
-    crate const ENABLED_EXTENSIONS: &'static [&'static str] = &[
+    pub(crate) const ENABLED_EXTENSIONS: &'static [&'static str] = &[
         #[cfg(feature = "tera_templates")] Tera::EXT,
         #[cfg(feature = "handlebars_templates")] Handlebars::EXT,
     ];
 
-    crate fn init(templates: &HashMap<String, TemplateInfo>) -> Option<Engines> {
+    pub(crate) fn init(templates: &HashMap<String, TemplateInfo>) -> Option<Engines> {
         fn inner<E: Engine>(templates: &HashMap<String, TemplateInfo>) -> Option<E> {
             let named_templates = templates.iter()
                 .filter(|&(_, i)| i.extension == E::EXT)
@@ -82,14 +88,14 @@ impl Engines {
                 None => return None
             },
             #[cfg(feature = "handlebars_templates")]
-            handlebars: match inner::<Handlebars>(templates) {
+            handlebars: match inner::<Handlebars<'static>>(templates) {
                 Some(hb) => hb,
                 None => return None
             },
         })
     }
 
-    crate fn render<C: Serialize>(
+    pub(crate) fn render<C: Serialize>(
         &self,
         name: &str,
         info: &TemplateInfo,

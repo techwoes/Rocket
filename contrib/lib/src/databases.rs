@@ -50,8 +50,6 @@
 //! In your application's source code, one-time:
 //!
 //! ```rust
-//! #![feature(proc_macro_hygiene)]
-//!
 //! #[macro_use] extern crate rocket;
 //! #[macro_use] extern crate rocket_contrib;
 //!
@@ -62,10 +60,9 @@
 //! #[database("sqlite_logs")]
 //! struct LogsDbConn(diesel::SqliteConnection);
 //!
-//! fn main() {
-//!     rocket::ignite()
-//!        .attach(LogsDbConn::fairing())
-//!        .launch();
+//! #[launch]
+//! fn rocket() -> rocket::Rocket {
+//!     rocket::ignite().attach(LogsDbConn::fairing())
 //! }
 //! # } fn main() {}
 //! ```
@@ -73,8 +70,6 @@
 //! Whenever a connection to the database is needed:
 //!
 //! ```rust
-//! # #![feature(proc_macro_hygiene)]
-//! #
 //! # #[macro_use] extern crate rocket;
 //! # #[macro_use] extern crate rocket_contrib;
 //! #
@@ -89,9 +84,9 @@
 //! # type Result<T> = std::result::Result<T, ()>;
 //! #
 //! #[get("/logs/<id>")]
-//! fn get_logs(conn: LogsDbConn, id: usize) -> Result<Logs> {
+//! async fn get_logs(conn: LogsDbConn, id: usize) -> Result<Logs> {
 //! # /*
-//!     Logs::by_id(&*conn, id)
+//!     conn.run(|c| Logs::by_id(c, id)).await
 //! # */
 //! # Ok(())
 //! }
@@ -139,18 +134,19 @@
 //!
 //! ### Procedurally
 //!
-//! Databases can also be configured procedurally database via
-//! `rocket::custom()`. The example below does just this:
+//! Databases can also be configured procedurally via `rocket::custom()`.
+//! The example below does just this:
 //!
 //! ```rust
-//! extern crate rocket;
+//! #[macro_use] extern crate rocket;
 //!
 //! # #[cfg(feature = "diesel_sqlite_pool")]
 //! # mod test {
 //! use std::collections::HashMap;
 //! use rocket::config::{Config, Environment, Value};
 //!
-//! fn main() {
+//! #[launch]
+//! fn rocket() -> rocket::Rocket {
 //!     let mut database_config = HashMap::new();
 //!     let mut databases = HashMap::new();
 //!
@@ -164,7 +160,7 @@
 //!         .finalize()
 //!         .unwrap();
 //!
-//!     rocket::custom(config).launch();
+//!     rocket::custom(config)
 //! }
 //! # } fn main() {}
 //! ```
@@ -195,6 +191,23 @@
 //! database. This corresponds to the database name set as the database's
 //! configuration key.
 //!
+//! The macro generates a [`FromRequest`] implementation for the decorated type,
+//! allowing the type to be used as a request guard. This implementation
+//! retrieves a connection from the database pool or fails with a
+//! `Status::ServiceUnavailable` if connecting to the database times out.
+//!
+//! The macro will also generate two inherent methods on the decorated type:
+//!
+//!   * `fn fairing() -> impl Fairing`
+//!
+//!      Returns a fairing that initializes the associated database connection
+//!      pool.
+//!
+//!   * `async fn get_one(&Cargo) -> Option<Self>`
+//!
+//!     Retrieves a connection wrapper from the configured pool. Returns `Some`
+//!     as long as `Self::fairing()` has been attached.
+//!
 //! The attribute can only be applied to unit-like structs with one type. The
 //! internal type of the structure must implement [`Poolable`].
 //!
@@ -221,36 +234,16 @@
 //! use rocket_contrib::databases::postgres;
 //!
 //! #[database("my_pg_db")]
-//! struct MyPgDatabase(postgres::Connection);
+//! struct MyPgDatabase(postgres::Client);
 //! # }
 //! ```
-//!
-//! The macro generates a [`FromRequest`] implementation for the decorated type,
-//! allowing the type to be used as a request guard. This implementation
-//! retrieves a connection from the database pool or fails with a
-//! `Status::ServiceUnavailable` if no connections are available. The macro also
-//! generates an implementation of the [`Deref`](std::ops::Deref) trait with
-//! the internal `Poolable` type as the target.
-//!
-//! The macro will also generate two inherent methods on the decorated type:
-//!
-//!   * `fn fairing() -> impl Fairing`
-//!
-//!      Returns a fairing that initializes the associated database connection
-//!      pool.
-//!
-//!   * `fn get_one(&Rocket) -> Option<Self>`
-//!
-//!     Retrieves a connection from the configured pool. Returns `Some` as long
-//!     as `Self::fairing()` has been attached and there is at least one
-//!     connection in the pool.
 //!
 //! The fairing returned from the generated `fairing()` method _must_ be
 //! attached for the request guard implementation to succeed. Putting the pieces
 //! together, a use of the `#[database]` attribute looks as follows:
 //!
 //! ```rust
-//! # extern crate rocket;
+//! # #[macro_use] extern crate rocket;
 //! # #[macro_use] extern crate rocket_contrib;
 //! #
 //! # #[cfg(feature = "diesel_sqlite_pool")]
@@ -263,7 +256,8 @@
 //! #[database("my_db")]
 //! struct MyDatabase(diesel::SqliteConnection);
 //!
-//! fn main() {
+//! #[launch]
+//! fn rocket() -> rocket::Rocket {
 //! #     let mut db_config = HashMap::new();
 //! #     let mut databases = HashMap::new();
 //! #
@@ -276,21 +270,17 @@
 //! #         .finalize()
 //! #         .unwrap();
 //! #
-//!     rocket::custom(config)
-//!         .attach(MyDatabase::fairing())
-//!         .launch();
+//!     rocket::custom(config).attach(MyDatabase::fairing())
 //! }
 //! # } fn main() {}
 //! ```
 //!
 //! ## Handlers
 //!
-//! Finally, simply use your type as a request guard in a handler to retrieve a
-//! connection to a given database:
+//! Finally, use your type as a request guard in a handler to retrieve a
+//! connection wrapper for the database:
 //!
 //! ```rust
-//! # #![feature(proc_macro_hygiene)]
-//! #
 //! # #[macro_use] extern crate rocket;
 //! # #[macro_use] extern crate rocket_contrib;
 //! #
@@ -307,12 +297,9 @@
 //! # }
 //! ```
 //!
-//! The generated `Deref` implementation allows easy access to the inner
-//! connection type:
+//! A connection can be retrieved and used with the `run()` method:
 //!
 //! ```rust
-//! # #![feature(proc_macro_hygiene)]
-//! #
 //! # #[macro_use] extern crate rocket;
 //! # #[macro_use] extern crate rocket_contrib;
 //! #
@@ -329,8 +316,8 @@
 //! }
 //!
 //! #[get("/")]
-//! fn my_handler(conn: MyDatabase) -> Data {
-//!     load_from_db(&*conn)
+//! async fn my_handler(mut conn: MyDatabase) -> Data {
+//!     conn.run(|c| load_from_db(c)).await
 //! }
 //! # }
 //! ```
@@ -349,35 +336,26 @@
 //! | Kind     | Driver                | Version   | `Poolable` Type                | Feature                |
 //! |----------|-----------------------|-----------|--------------------------------|------------------------|
 //! | MySQL    | [Diesel]              | `1`       | [`diesel::MysqlConnection`]    | `diesel_mysql_pool`    |
-//! | MySQL    | [`rust-mysql-simple`] | `16`      | [`mysql::conn`]                | `mysql_pool`           |
+//! | MySQL    | [`rust-mysql-simple`] | `18`      | [`mysql::Conn`]                | `mysql_pool`           |
 //! | Postgres | [Diesel]              | `1`       | [`diesel::PgConnection`]       | `diesel_postgres_pool` |
-//! | Postgres | [Rust-Postgres]       | `0.15`    | [`postgres::Connection`]       | `postgres_pool`        |
+//! | Postgres | [Rust-Postgres]       | `0.17`    | [`postgres::Client`]           | `postgres_pool`        |
 //! | Sqlite   | [Diesel]              | `1`       | [`diesel::SqliteConnection`]   | `diesel_sqlite_pool`   |
-//! | Sqlite   | [`Rustqlite`]         | `0.16`    | [`rusqlite::Connection`]       | `sqlite_pool`          |
-//! | Neo4j    | [`rusted_cypher`]     | `1`       | [`rusted_cypher::GraphClient`] | `cypher_pool`          |
-//! | Redis    | [`redis-rs`]          | `0.10`    | [`redis::Connection`]          | `redis_pool`           |
-//! | MongoDB  | [`mongodb`]           | `0.3.12`  | [`mongodb::db::Database`]      | `mongodb_pool`         |
-//! | Memcache | [`memcache`]          | `0.11`    | [`memcache::Client`]           | `memcache_pool`        |
+//! | Sqlite   | [`Rusqlite`]          | `0.23`    | [`rusqlite::Connection`]       | `sqlite_pool`          |
+//! | Memcache | [`memcache`]          | `0.14`    | [`memcache::Client`]           | `memcache_pool`        |
 //!
 //! [Diesel]: https://diesel.rs
-//! [`redis::Connection`]: https://docs.rs/redis/0.9.0/redis/struct.Connection.html
-//! [`rusted_cypher::GraphClient`]: https://docs.rs/rusted_cypher/1.1.0/rusted_cypher/graph/struct.GraphClient.html
-//! [`rusqlite::Connection`]: https://docs.rs/rusqlite/0.16.0/rusqlite/struct.Connection.html
+//! [`rusqlite::Connection`]: https://docs.rs/rusqlite/0.23.0/rusqlite/struct.Connection.html
 //! [`diesel::SqliteConnection`]: http://docs.diesel.rs/diesel/prelude/struct.SqliteConnection.html
-//! [`postgres::Connection`]: https://docs.rs/postgres/0.15.2/postgres/struct.Connection.html
+//! [`postgres::Client`]: https://docs.rs/postgres/0.17/postgres/struct.Client.html
 //! [`diesel::PgConnection`]: http://docs.diesel.rs/diesel/pg/struct.PgConnection.html
-//! [`mysql::conn`]: https://docs.rs/mysql/14.0.0/mysql/struct.Conn.html
+//! [`mysql::Conn`]: https://docs.rs/mysql/18/mysql/struct.Conn.html
 //! [`diesel::MysqlConnection`]: http://docs.diesel.rs/diesel/mysql/struct.MysqlConnection.html
-//! [`redis-rs`]: https://github.com/mitsuhiko/redis-rs
-//! [`rusted_cypher`]: https://github.com/livioribeiro/rusted-cypher
-//! [`Rustqlite`]: https://github.com/jgallagher/rusqlite
+//! [`Rusqlite`]: https://github.com/jgallagher/rusqlite
 //! [Rust-Postgres]: https://github.com/sfackler/rust-postgres
 //! [`rust-mysql-simple`]: https://github.com/blackbeam/rust-mysql-simple
 //! [`diesel::PgConnection`]: http://docs.diesel.rs/diesel/pg/struct.PgConnection.html
-//! [`mongodb`]: https://github.com/mongodb-labs/mongo-rust-driver-prototype
-//! [`mongodb::db::Database`]: https://docs.rs/mongodb/0.3.12/mongodb/db/type.Database.html
 //! [`memcache`]: https://github.com/aisk/rust-memcache
-//! [`memcache::Client`]: https://docs.rs/memcache/0.11.0/memcache/struct.Client.html
+//! [`memcache::Client`]: https://docs.rs/memcache/0.14/memcache/struct.Client.html
 //!
 //! The above table lists all the supported database adapters in this library.
 //! In order to use particular `Poolable` type that's included in this library,
@@ -394,7 +372,7 @@
 //!
 //! [`FromRequest`]: rocket::request::FromRequest
 //! [request guards]: rocket::request::FromRequest
-//! [`Poolable`]: databases::Poolable
+//! [`Poolable`]: crate::databases::Poolable
 
 pub extern crate r2d2;
 
@@ -403,11 +381,17 @@ pub extern crate r2d2;
           feature = "diesel_mysql_pool"))]
 pub extern crate diesel;
 
-use std::collections::BTreeMap;
 use std::fmt::{self, Display, Formatter};
-use std::marker::{Send, Sized};
+use std::marker::PhantomData;
+use std::sync::Arc;
 
 use rocket::config::{self, Value};
+use rocket::fairing::{AdHoc, Fairing};
+use rocket::request::{Request, Outcome, FromRequest};
+use rocket::outcome::IntoOutcome;
+use rocket::http::Status;
+
+use rocket::tokio::sync::{OwnedSemaphorePermit, Semaphore, Mutex};
 
 use self::r2d2::ManageConnection;
 
@@ -421,15 +405,6 @@ use self::r2d2::ManageConnection;
 
 #[cfg(feature = "sqlite_pool")] pub extern crate rusqlite;
 #[cfg(feature = "sqlite_pool")] pub extern crate r2d2_sqlite;
-
-#[cfg(feature = "cypher_pool")] pub extern crate rusted_cypher;
-#[cfg(feature = "cypher_pool")] pub extern crate r2d2_cypher;
-
-#[cfg(feature = "redis_pool")] pub extern crate redis;
-#[cfg(feature = "redis_pool")] pub extern crate r2d2_redis;
-
-#[cfg(feature = "mongodb_pool")] pub extern crate mongodb;
-#[cfg(feature = "mongodb_pool")] pub extern crate r2d2_mongodb;
 
 #[cfg(feature = "memcache_pool")] pub extern crate memcache;
 #[cfg(feature = "memcache_pool")] pub extern crate r2d2_memcache;
@@ -468,7 +443,7 @@ pub struct DatabaseConfig<'a> {
     pub pool_size: u32,
     /// Any extra options that are included in the configuration, **excluding**
     /// the url and pool_size.
-    pub extras: BTreeMap<String, Value>,
+    pub extras: rocket::config::Map<String, Value>,
 }
 
 /// A wrapper around `r2d2::Error`s or a custom database error type.
@@ -545,16 +520,17 @@ pub enum ConfigError {
 /// #     .extra("databases", databases)
 /// #     .expect("custom config okay");
 /// #
-/// # rocket::custom(config).attach(AdHoc::on_attach("Testing", |rocket| {
+/// # rocket::custom(config).attach(AdHoc::on_attach("Testing", |mut rocket| async {
 /// # {
-/// let config = database_config("my_db", rocket.config()).unwrap();
+/// let rocket_config = rocket.config().await;
+/// let config = database_config("my_db", rocket_config).unwrap();
 /// assert_eq!(config.url, "db/db.sqlite");
 /// assert_eq!(config.pool_size, 25);
 ///
-/// let other_config = database_config("my_other_db", rocket.config()).unwrap();
+/// let other_config = database_config("my_other_db", rocket_config).unwrap();
 /// assert_eq!(other_config.url, "mysql://root:root@localhost/database");
 ///
-/// let error = database_config("invalid_db", rocket.config()).unwrap_err();
+/// let error = database_config("invalid_db", rocket_config).unwrap_err();
 /// assert_eq!(error, ConfigError::MissingKey);
 /// # }
 /// #
@@ -631,8 +607,6 @@ impl<'a> Display for ConfigError {
 ///   * `postgres::Connection`
 ///   * `mysql::Conn`
 ///   * `rusqlite::Connection`
-///   * `rusted_cypher::GraphClient`
-///   * `redis::Connection`
 ///
 /// # Implementation Guide
 ///
@@ -714,7 +688,7 @@ pub trait Poolable: Send + Sized + 'static {
     type Manager: ManageConnection<Connection=Self>;
     /// The associated error type in the event that constructing the connection
     /// manager and/or the connection pool fails.
-    type Error;
+    type Error: std::fmt::Debug;
 
     /// Creates an `r2d2` connection pool for `Manager::Connection`, returning
     /// the pool on success.
@@ -756,13 +730,15 @@ impl Poolable for diesel::MysqlConnection {
 
 // TODO: Come up with a way to handle TLS
 #[cfg(feature = "postgres_pool")]
-impl Poolable for postgres::Connection {
-    type Manager = r2d2_postgres::PostgresConnectionManager;
+impl Poolable for postgres::Client {
+    type Manager = r2d2_postgres::PostgresConnectionManager<postgres::tls::NoTls>;
     type Error = DbError<postgres::Error>;
 
     fn pool(config: DatabaseConfig<'_>) -> Result<r2d2::Pool<Self::Manager>, Self::Error> {
-        let manager = r2d2_postgres::PostgresConnectionManager::new(config.url, r2d2_postgres::TlsMode::None)
-            .map_err(DbError::Custom)?;
+        let manager = r2d2_postgres::PostgresConnectionManager::new(
+            config.url.parse().map_err(DbError::Custom)?,
+            postgres::tls::NoTls,
+        );
 
         r2d2::Pool::builder().max_size(config.pool_size).build(manager)
             .map_err(DbError::PoolError)
@@ -793,40 +769,6 @@ impl Poolable for rusqlite::Connection {
     }
 }
 
-#[cfg(feature = "cypher_pool")]
-impl Poolable for rusted_cypher::GraphClient {
-    type Manager = r2d2_cypher::CypherConnectionManager;
-    type Error = r2d2::Error;
-
-    fn pool(config: DatabaseConfig<'_>) -> Result<r2d2::Pool<Self::Manager>, Self::Error> {
-        let manager = r2d2_cypher::CypherConnectionManager { url: config.url.to_string() };
-        r2d2::Pool::builder().max_size(config.pool_size).build(manager)
-    }
-}
-
-#[cfg(feature = "redis_pool")]
-impl Poolable for redis::Connection {
-    type Manager = r2d2_redis::RedisConnectionManager;
-    type Error = DbError<redis::RedisError>;
-
-    fn pool(config: DatabaseConfig<'_>) -> Result<r2d2::Pool<Self::Manager>, Self::Error> {
-        let manager = r2d2_redis::RedisConnectionManager::new(config.url).map_err(DbError::Custom)?;
-        r2d2::Pool::builder().max_size(config.pool_size).build(manager)
-            .map_err(DbError::PoolError)
-    }
-}
-
-#[cfg(feature = "mongodb_pool")]
-impl Poolable for mongodb::db::Database {
-    type Manager = r2d2_mongodb::MongodbConnectionManager;
-    type Error = DbError<mongodb::Error>;
-
-    fn pool(config: DatabaseConfig<'_>) -> Result<r2d2::Pool<Self::Manager>, Self::Error> {
-        let manager = r2d2_mongodb::MongodbConnectionManager::new_with_uri(config.url).map_err(DbError::Custom)?;
-        r2d2::Pool::builder().max_size(config.pool_size).build(manager).map_err(DbError::PoolError)
-    }
-}
-
 #[cfg(feature = "memcache_pool")]
 impl Poolable for memcache::Client {
     type Manager = r2d2_memcache::MemcacheConnectionManager;
@@ -835,6 +777,161 @@ impl Poolable for memcache::Client {
     fn pool(config: DatabaseConfig<'_>) -> Result<r2d2::Pool<Self::Manager>, Self::Error> {
         let manager = r2d2_memcache::MemcacheConnectionManager::new(config.url);
         r2d2::Pool::builder().max_size(config.pool_size).build(manager).map_err(DbError::PoolError)
+    }
+}
+
+/// Unstable internal details of generated code for the #[database] attribute.
+///
+/// This type is implemented here instead of in generated code to ensure all
+/// types are properly checked.
+#[doc(hidden)]
+pub struct ConnectionPool<K, C: Poolable> {
+    pool: r2d2::Pool<C::Manager>,
+    semaphore: Arc<Semaphore>,
+    _marker: PhantomData<fn() -> K>,
+}
+
+/// Unstable internal details of generated code for the #[database] attribute.
+///
+/// This type is implemented here instead of in generated code to ensure all
+/// types are properly checked.
+#[doc(hidden)]
+pub struct Connection<K, C: Poolable> {
+    connection: Arc<Mutex<Option<r2d2::PooledConnection<C::Manager>>>>,
+    permit: Option<OwnedSemaphorePermit>,
+    _marker: PhantomData<fn() -> K>,
+}
+
+// A wrapper around spawn_blocking that propagates panics to the calling code.
+async fn run_blocking<F, R>(job: F) -> R
+    where F: FnOnce() -> R + Send + 'static, R: Send + 'static,
+{
+    match tokio::task::spawn_blocking(job).await {
+        Ok(ret) => ret,
+        Err(e) => match e.try_into_panic() {
+            Ok(panic) => std::panic::resume_unwind(panic),
+            Err(_) => unreachable!("spawn_blocking tasks are never cancelled"),
+        }
+    }
+}
+
+impl<K: 'static, C: Poolable> ConnectionPool<K, C> {
+    pub fn fairing(fairing_name: &'static str, config_name: &'static str) -> impl Fairing {
+        AdHoc::on_attach(fairing_name, move |mut rocket| async move {
+            let config = database_config(config_name, rocket.config().await);
+            let pool = config.map(|c| (c.pool_size, C::pool(c)));
+
+            match pool {
+                Ok((size, Ok(pool))) => {
+                    let managed = ConnectionPool::<K, C> {
+                        pool,
+                        semaphore: Arc::new(Semaphore::new(size as usize)),
+                        _marker: PhantomData,
+                    };
+                    Ok(rocket.manage(managed))
+                },
+                Err(config_error) => {
+                    rocket::logger::error(
+                        &format!("Database configuration failure: '{}'", config_name));
+                    rocket::logger::error_(&config_error.to_string());
+                    Err(rocket)
+                },
+                Ok((_, Err(pool_error))) => {
+                    rocket::logger::error(
+                        &format!("Failed to initialize pool for '{}'", config_name));
+                    rocket::logger::error_(&format!("{:?}", pool_error));
+                    Err(rocket)
+                },
+            }
+        })
+    }
+
+    async fn get(&self) -> Result<Connection<K, C>, ()> {
+        // TODO: Make timeout configurable.
+        let permit = match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.semaphore.clone().acquire_owned()
+        ).await {
+            Ok(p) => p,
+            Err(_) => {
+                error_!("Failed to get a database connection within the timeout.");
+                return Err(());
+            }
+        };
+
+        // TODO: Make timeout configurable.
+        let pool = self.pool.clone();
+        match run_blocking(move || pool.get_timeout(std::time::Duration::from_secs(5))).await {
+            Ok(c) => Ok(Connection {
+                connection: Arc::new(Mutex::new(Some(c))),
+                permit: Some(permit),
+                _marker: PhantomData,
+            }),
+            Err(e) => {
+                error_!("Failed to get a database connection: {}", e);
+                Err(())
+            }
+        }
+    }
+
+    #[inline]
+    pub async fn get_one(cargo: &rocket::Cargo) -> Option<Connection<K, C>> {
+        match cargo.state::<Self>() {
+            Some(pool) => pool.get().await.ok(),
+            None => {
+                error_!("Database fairing was not attached for {}", std::any::type_name::<K>());
+                None
+            }
+        }
+    }
+}
+
+impl<K: 'static, C: Poolable> Connection<K, C> {
+    #[inline]
+    pub async fn run<F, R>(&self, f: F) -> R
+        where F: FnOnce(&mut C) -> R + Send + 'static,
+              R: Send + 'static,
+    {
+        let mut connection = self.connection.clone().lock_owned().await;
+        run_blocking(move || {
+            let conn = connection.as_mut()
+                .expect("internal invariant broken: self.connection is Some");
+            f(conn)
+        }).await
+    }
+}
+
+impl<K, C: Poolable> Drop for Connection<K, C> {
+    fn drop(&mut self) {
+        let connection = self.connection.clone();
+        let permit = self.permit.take();
+        tokio::spawn(async move {
+            let mut connection = connection.lock_owned().await;
+            tokio::task::spawn_blocking(move || {
+                if let Some(conn) = connection.take() {
+                    drop(conn);
+                }
+                // NB: Explicitly dropping the permit here so that it's only
+                // released after the connection is.
+                drop(permit);
+            })
+        });
+    }
+}
+
+#[rocket::async_trait]
+impl<'a, 'r, K: 'static, C: Poolable> FromRequest<'a, 'r> for Connection<K, C> {
+    type Error = ();
+
+    #[inline]
+    async fn from_request(request: &'a Request<'r>) -> Outcome<Self, ()> {
+        match request.managed_state::<ConnectionPool<K, C>>() {
+            Some(c) => c.get().await.into_outcome(Status::ServiceUnavailable),
+            None => {
+                error_!("Missing database fairing for `{}`", std::any::type_name::<K>());
+                Outcome::Failure((Status::InternalServerError, ()))
+            }
+        }
     }
 }
 

@@ -4,7 +4,7 @@ use rocket::Rocket;
 use rocket::config::ConfigError;
 use rocket::fairing::{Fairing, Info, Kind};
 
-crate use self::context::ContextManager;
+pub(crate) use self::context::ContextManager;
 
 #[cfg(not(debug_assertions))]
 mod context {
@@ -13,18 +13,18 @@ mod context {
 
     /// Wraps a Context. With `cfg(debug_assertions)` active, this structure
     /// additionally provides a method to reload the context at runtime.
-    crate struct ContextManager(Context);
+    pub(crate) struct ContextManager(Context);
 
     impl ContextManager {
-        crate fn new(ctxt: Context) -> ContextManager {
+        pub fn new(ctxt: Context) -> ContextManager {
             ContextManager(ctxt)
         }
 
-        crate fn context<'a>(&'a self) -> impl Deref<Target=Context> + 'a {
+        pub fn context<'a>(&'a self) -> impl Deref<Target=Context> + 'a {
             &self.0
         }
 
-        crate fn is_reloading(&self) -> bool {
+        pub fn is_reloading(&self) -> bool {
             false
         }
     }
@@ -42,7 +42,7 @@ mod context {
 
     /// Wraps a Context. With `cfg(debug_assertions)` active, this structure
     /// additionally provides a method to reload the context at runtime.
-    crate struct ContextManager {
+    pub(crate) struct ContextManager {
         /// The current template context, inside an RwLock so it can be updated.
         context: RwLock<Context>,
         /// A filesystem watcher and the receive queue for its events.
@@ -50,7 +50,7 @@ mod context {
     }
 
     impl ContextManager {
-        crate fn new(ctxt: Context) -> ContextManager {
+        pub fn new(ctxt: Context) -> ContextManager {
             let (tx, rx) = channel();
             let watcher = raw_watcher(tx).and_then(|mut watcher| {
                 watcher.watch(ctxt.root.canonicalize()?, RecursiveMode::Recursive)?;
@@ -73,11 +73,11 @@ mod context {
             }
         }
 
-        crate fn context(&self) -> impl Deref<Target=Context> + '_ {
+        pub fn context(&self) -> impl Deref<Target=Context> + '_ {
             self.context.read().unwrap()
         }
 
-        crate fn is_reloading(&self) -> bool {
+        pub fn is_reloading(&self) -> bool {
             self.watcher.is_some()
         }
 
@@ -89,7 +89,7 @@ mod context {
         /// have been changes since the last reload, all templates are
         /// reinitialized from disk and the user's customization callback is run
         /// again.
-        crate fn reload_if_needed<F: Fn(&mut Engines)>(&self, custom_callback: F) {
+        pub fn reload_if_needed<F: Fn(&mut Engines)>(&self, custom_callback: F) {
             self.watcher.as_ref().map(|w| {
                 let rx_lock = w.lock().expect("receive queue lock");
                 let mut changed = false;
@@ -121,20 +121,29 @@ pub struct TemplateFairing {
     /// The user-provided customization callback, allowing the use of
     /// functionality specific to individual template engines. In debug mode,
     /// this callback might be run multiple times as templates are reloaded.
-    crate custom_callback: Box<dyn Fn(&mut Engines) + Send + Sync + 'static>,
+    pub custom_callback: Box<dyn Fn(&mut Engines) + Send + Sync + 'static>,
 }
 
+#[rocket::async_trait]
 impl Fairing for TemplateFairing {
     fn info(&self) -> Info {
         // The on_request part of this fairing only applies in debug
         // mode, so only register it in debug mode.
-        Info {
+        #[cfg(debug_assertions)]
+        let info = Info {
             name: "Templates",
-            #[cfg(debug_assertions)]
             kind: Kind::Attach | Kind::Request,
-            #[cfg(not(debug_assertions))]
+        };
+
+        // FIXME: We declare two `info` variables here, instead of just one with
+        // `cfg`s on `kind`, due to issue #63 in `async_trait`.
+        #[cfg(not(debug_assertions))]
+        let info = Info {
+            name: "Templates",
             kind: Kind::Attach,
-        }
+        };
+
+        info
     }
 
     /// Initializes the template context. Templates will be searched for in the
@@ -142,10 +151,11 @@ impl Fairing for TemplateFairing {
     /// The user's callback, if any was supplied, is called to customize the
     /// template engines. In debug mode, the `ContextManager::new` method
     /// initializes a directory watcher for auto-reloading of templates.
-    fn on_attach(&self, rocket: Rocket) -> Result<Rocket, Rocket> {
-        let mut template_root = rocket.config().root_relative(DEFAULT_TEMPLATE_DIR);
-        match rocket.config().get_str("template_dir") {
-            Ok(dir) => template_root = rocket.config().root_relative(dir),
+    async fn on_attach(&self, mut rocket: Rocket) -> Result<Rocket, Rocket> {
+        let config = rocket.config().await;
+        let mut template_root = config.root_relative(DEFAULT_TEMPLATE_DIR);
+        match config.get_str("template_dir") {
+            Ok(dir) => template_root = config.root_relative(dir),
             Err(ConfigError::Missing(_)) => { /* ignore missing */ }
             Err(e) => {
                 e.pretty_print();
@@ -163,8 +173,8 @@ impl Fairing for TemplateFairing {
     }
 
     #[cfg(debug_assertions)]
-    fn on_request(&self, req: &mut rocket::Request<'_>, _data: &rocket::Data) {
-        let cm = req.guard::<rocket::State<'_, ContextManager>>()
+    async fn on_request(&self, req: &mut rocket::Request<'_>, _data: &rocket::Data) {
+        let cm = req.guard::<rocket::State<'_, ContextManager>>().await
             .expect("Template ContextManager registered in on_attach");
 
         cm.reload_if_needed(&*self.custom_callback);

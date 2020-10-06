@@ -16,30 +16,36 @@
 //!
 //! # Contrib
 //!
-//! The [`contrib` crate](rocket_contrib) contains several useful `Responder`s
-//! including [`Template`](rocket_contrib::Template) and
-//! [`Json`](rocket_contrib::Json).
+//! The [`contrib` crate] contains several useful `Responder`s including
+//! [`Template`] and [`Json`].
+//!
+//! [`contrib` crate]: ../../rocket_contrib
+//! [`Template`]: ../../rocket_contrib/templates/struct.Template.html
+//! [`Json`]: ../../rocket_contrib/json/struct.Json.html
 
 mod responder;
 mod redirect;
 mod named_file;
 mod stream;
 mod response;
+mod debug;
 
-crate mod flash;
+pub(crate) mod flash;
 
 pub mod content;
 pub mod status;
 
 #[doc(hidden)] pub use rocket_codegen::Responder;
 
-pub use self::response::{Response, ResponseBuilder, Body, DEFAULT_CHUNK_SIZE};
+pub use self::response::DEFAULT_CHUNK_SIZE;
+pub use self::response::{Response, ResponseBody, ResponseBuilder, Body};
 pub use self::responder::Responder;
 pub use self::redirect::Redirect;
 pub use self::flash::Flash;
 pub use self::named_file::NamedFile;
 pub use self::stream::Stream;
+pub use self::debug::Debug;
 #[doc(inline)] pub use self::content::Content;
 
-/// Type alias for the `Result` of a `Responder::respond` call.
-pub type Result<'r> = std::result::Result<self::Response<'r>, crate::http::Status>;
+/// Type alias for the `Result` of a [`Responder::respond_to()`] call.
+pub type Result<'r> = std::result::Result<Response<'r>, crate::http::Status>;

@@ -36,6 +36,9 @@ the wrapped `Responder`. As an example, the [`Accepted`] type sets the status to
 `202 - Accepted`. It can be used as follows:
 
 ```rust
+# #[macro_use] extern crate rocket;
+# fn main() {}
+
 use rocket::response::status;
 
 #[post("/<id>")]
@@ -50,11 +53,13 @@ Content-Type of `&'static str` to JSON, you can use the [`content::Json`] type
 as follows:
 
 ```rust
+# #[macro_use] extern crate rocket;
+# fn main() {}
 use rocket::response::content;
 
 #[get("/")]
 fn json() -> content::Json<&'static str> {
-    content::Json("{ 'hi': 'world' }")
+    content::Json("{ \"hi\": \"world\" }")
 }
 ```
 
@@ -65,10 +70,9 @@ fn json() -> content::Json<&'static str> {
 
 ### Errors
 
-Responders may fail; they need not _always_ generate a response. Instead, they
-can return an `Err` with a given status code. When this happens, Rocket forwards
-the request to the [error catcher](../requests/#error-catchers) for the
-given status code.
+Responders may fail instead of generating a response by returning an `Err` with
+a status code. When this happens, Rocket forwards the request to the [error
+catcher](../requests/#error-catchers) for that status code.
 
 If an error catcher has been registered for the given status code, Rocket will
 invoke it. The catcher creates and returns a response to the client. If no error
@@ -85,6 +89,9 @@ returning a [`Status`] directly. For instance, to forward to the catcher for
 **406: Not Acceptable**, you would write:
 
 ```rust
+# #[macro_use] extern crate rocket;
+# fn main() {}
+
 use rocket::http::Status;
 
 #[get("/")]
@@ -116,12 +123,19 @@ responder, headers, or sets a custom status or content-type, `Responder` can be
 automatically derived:
 
 ```rust
+# #[macro_use] extern crate rocket;
+# fn main() {}
+
+use rocket::http::{Header, ContentType};
+# type OtherResponder = ();
+# type MyType = u8;
+
 #[derive(Responder)]
 #[response(status = 500, content_type = "json")]
 struct MyResponder {
     inner: OtherResponder,
-    header: SomeHeader,
-    more: YetAnotherHeader,
+    header: ContentType,
+    more: Header<'static>,
     #[response(ignore)]
     unrelated: MyType,
 }
@@ -144,7 +158,7 @@ simply including fields of these types.
 For more on using the `Responder` derive, see the [`Responder` derive]
 documentation.
 
-[`Responder` derive]: @api/rocket_codegen/derive.Responder.html
+[`Responder` derive]: @api/rocket/derive.Responder.html
 
 ## Implementations
 
@@ -160,11 +174,25 @@ to `text/plain`. To get a taste for what such a `Responder` implementation looks
 like, here's the implementation for `String`:
 
 ```rust
-impl Responder<'static> for String {
-    fn respond_to(self, _: &Request) -> Result<Response<'static>, Status> {
+# #[macro_use] extern crate rocket;
+# fn main() {}
+
+use std::io::Cursor;
+
+use rocket::request::Request;
+use rocket::response::{self, Response, Responder};
+use rocket::http::ContentType;
+
+# struct String(std::string::String);
+#[rocket::async_trait]
+impl<'r> Responder<'r, 'static> for String {
+    fn respond_to(self, _: &'r Request<'_>) -> response::Result<'static> {
         Response::build()
             .header(ContentType::Plain)
-            .sized_body(Cursor::new(self))
+            # /*
+            .sized_body(self.len(), Cursor::new(self))
+            # */
+            # .sized_body(self.0.len(), Cursor::new(self.0))
             .ok()
     }
 }
@@ -174,6 +202,8 @@ Because of these implementations, you can directly return an `&str` or `String`
 type from a handler:
 
 ```rust
+# #[macro_use] extern crate rocket;
+# fn main() {}
 #[get("/string")]
 fn handler() -> &'static str {
     "Hello there! I'm a string!"
@@ -193,9 +223,15 @@ known until process-time whether content exists. For example, because of
 found and a `404` when a file is not found in just 4, idiomatic lines:
 
 ```rust
+# #[macro_use] extern crate rocket;
+# fn main() {}
+
+# use std::path::{Path, PathBuf};
+use rocket::response::NamedFile;
+
 #[get("/<file..>")]
-fn files(file: PathBuf) -> Option<NamedFile> {
-    NamedFile::open(Path::new("static/").join(file)).ok()
+async fn files(file: PathBuf) -> Option<NamedFile> {
+    NamedFile::open(Path::new("static/").join(file)).await.ok()
 }
 ```
 
@@ -212,12 +248,17 @@ file server, for instance, we might wish to provide more feedback to the user
 when a file isn't found. We might do this as follows:
 
 ```rust
+# #[macro_use] extern crate rocket;
+# fn main() {}
+
+# use std::path::{Path, PathBuf};
+use rocket::response::NamedFile;
 use rocket::response::status::NotFound;
 
 #[get("/<file..>")]
-fn files(file: PathBuf) -> Result<NamedFile, NotFound<String>> {
+async fn files(file: PathBuf) -> Result<NamedFile, NotFound<String>> {
     let path = Path::new("static/").join(file);
-    NamedFile::open(&path).map_err(|_| NotFound(format!("Bad path: {}", path)))
+    NamedFile::open(&path).await.map_err(|e| NotFound(e.to_string()))
 }
 ```
 
@@ -258,14 +299,26 @@ library. Among these are:
 The `Stream` type deserves special attention. When a large amount of data needs
 to be sent to the client, it is better to stream the data to the client to avoid
 consuming large amounts of memory. Rocket provides the [`Stream`] type, making
-this easy. The `Stream` type can be created from any `Read` type. For example,
-to stream from a local Unix stream, we might write:
+this easy. The `Stream` type can be created from any `AsyncRead` type. For
+example, to stream from a local Unix stream, we might write:
 
 ```rust
+# #[macro_use] extern crate rocket;
+# fn main() {}
+
+# mod test {
+use std::net::SocketAddr;
+
+use rocket::response::{Stream, Debug};
+
+use rocket::tokio::net::TcpStream;
+
 #[get("/stream")]
-fn stream() -> io::Result<Stream<UnixStream>> {
-    UnixStream::connect("/path/to/my/socket").map(|s| Stream::from(s))
+async fn stream() -> Result<Stream<TcpStream>, Debug<std::io::Error>> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], 9999));
+    Ok(TcpStream::connect(addr).await.map(Stream::from)?)
 }
+# }
 ```
 
 [`rocket_contrib`]: @api/rocket_contrib/
@@ -281,13 +334,20 @@ As an example, to respond with the JSON value of a `Task` structure, we might
 write:
 
 ```rust
+# #[macro_use] extern crate rocket;
+# #[macro_use] extern crate rocket_contrib;
+# fn main() {}
+
+use serde::Serialize;
 use rocket_contrib::json::Json;
 
 #[derive(Serialize)]
-struct Task { ... }
+struct Task { /* .. */ }
 
 #[get("/todo")]
-fn todo() -> Json<Task> { ... }
+fn todo() -> Json<Task> {
+    Json(Task { /* .. */ })
+}
 ```
 
 The `Json` type serializes the structure into JSON, sets the Content-Type to
@@ -308,9 +368,17 @@ Rocket includes built-in templating support that works largely through a
 for instance, you might return a value of type `Template` as follows:
 
 ```rust
+# #[macro_use] extern crate rocket;
+# #[macro_use] extern crate rocket_contrib;
+# fn main() {}
+
+use rocket_contrib::templates::Template;
+
 #[get("/")]
 fn index() -> Template {
+    # /*
     let context = /* object-like value */;
+    # */ let context = ();
     Template::render("index", &context)
 }
 ```
@@ -327,9 +395,13 @@ fairings. To attach the template fairing, simply call
 `.attach(Template::fairing())` on an instance of `Rocket` as follows:
 
 ```rust
+# #[macro_use] extern crate rocket;
+
+# use rocket_contrib::templates::Template;
+
 fn main() {
     rocket::ignite()
-        .mount("/", routes![...])
+        .mount("/", routes![/* .. */])
         .attach(Template::fairing());
 }
 ```
@@ -383,13 +455,21 @@ methods such as [`Redirect::to()`].
 For example, given the following route:
 
 ```rust
+# #[macro_use] extern crate rocket;
+# fn main() {}
+
 #[get("/person/<name>?<age>")]
-fn person(name: String, age: Option<u8>) -> T
+fn person(name: String, age: Option<u8>) { /* .. */ }
 ```
 
 URIs to `person` can be created as follows:
 
 ```rust
+# #[macro_use] extern crate rocket;
+
+# #[get("/person/<name>?<age>")]
+# fn person(name: String, age: Option<u8>) { /* .. */ }
+
 // with unnamed parameters, in route path declaration order
 let mike = uri!(person: "Mike Smith", 28);
 assert_eq!(mike.to_string(), "/person/Mike%20Smith?age=28");
@@ -411,7 +491,7 @@ assert_eq!(mike.to_string(), "/person/Mike");
 
 Rocket informs you of any mismatched parameters at compile-time:
 
-```rust
+```rust,ignore
 error: person route uri expects 2 parameters but 1 was supplied
  --> examples/uri/src/main.rs:9:29
   |
@@ -423,7 +503,7 @@ error: person route uri expects 2 parameters but 1 was supplied
 
 Rocket also informs you of any type errors at compile-time:
 
-```rust
+```rust,ignore
 error: the trait bound u8: FromUriParam<Query, &str> is not satisfied
  --> examples/uri/src/main.rs:9:35
   |
@@ -451,6 +531,12 @@ in the query part of a URI, derive using [`UriDisplayQuery`].
 As an example, consider the following form structure and route:
 
 ```rust
+# #[macro_use] extern crate rocket;
+# fn main() {}
+
+use rocket::http::RawStr;
+use rocket::request::Form;
+
 #[derive(FromForm, UriDisplayQuery)]
 struct UserDetails<'r> {
     age: Option<usize>,
@@ -458,7 +544,7 @@ struct UserDetails<'r> {
 }
 
 #[post("/user/<id>?<details..>")]
-fn add_user(id: usize, details: Form<UserDetails>) { .. }
+fn add_user(id: usize, details: Form<UserDetails>) { /* .. */ }
 ```
 
 By deriving using `UriDisplayQuery`, an implementation of `UriDisplay<Query>` is
@@ -466,8 +552,22 @@ automatically generated, allowing for URIs to `add_user` to be generated using
 `uri!`:
 
 ```rust
-uri!(add_user: 120, UserDetails { age: Some(20), nickname: "Bob".into() })
-  => "/user/120?age=20&nickname=Bob"
+# #[macro_use] extern crate rocket;
+
+# use rocket::http::RawStr;
+# use rocket::request::Form;
+
+# #[derive(FromForm, UriDisplayQuery)]
+# struct UserDetails<'r> {
+#     age: Option<usize>,
+#     nickname: &'r RawStr,
+# }
+
+# #[post("/user/<id>?<details..>")]
+# fn add_user(id: usize, details: Form<UserDetails>) { /* .. */ }
+
+let link = uri!(add_user: 120, UserDetails { age: Some(20), nickname: "Bob".into() });
+assert_eq!(link.to_string(), "/user/120?age=20&nickname=Bob");
 ```
 
 ### Typed URI Parts
@@ -492,8 +592,8 @@ of `FromUriParam<Path>` and `FromUriParam<Query>`.
 
 ### Conversions
 
-The [`FromUriParam`] is used to perform a conversion for each value passed to
-`uri!` before it is displayed with `UriDisplay`. If a `FromUriParam<P, S>`
+[`FromUriParam`] is used to perform a conversion for each value passed to `uri!`
+before it is displayed with `UriDisplay`. If a `FromUriParam<P, S>`
 implementation exists for a type `T` for part URI part `P`, then a value of type
 `S` can be used in `uri!` macro for a route URI parameter declared with a type
 of `T` in part `P`. For example, the following implementation, provided by
@@ -501,7 +601,13 @@ Rocket, allows an `&str` to be used in a `uri!` invocation for route URI
 parameters declared as `String`:
 
 ```rust
-impl<P: UriPart, 'a> FromUriParam<P, &'a str> for String { .. }
+# use rocket::http::uri::{FromUriParam, UriPart};
+# struct S;
+# type String = S;
+impl<'a, P: UriPart> FromUriParam<P, &'a str> for String {
+    type Target = &'a str;
+#   fn from_uri_param(s: &'a str) -> Self::Target { "hi" }
+}
 ```
 
 Other conversions to be aware of are:
@@ -519,10 +625,18 @@ Conversions _nest_. For instance, a value of type `T` can be supplied when a
 value of type `Option<Form<T>>` is expected:
 
 ```rust
-#[get("/person/<id>?<details>")]
-fn person(id: usize, details: Option<Form<UserDetails>>) -> T
+# #[macro_use] extern crate rocket;
 
-uri!(person: id = 100, details = UserDetails { .. })
+# use rocket::http::RawStr;
+# use rocket::request::Form;
+
+# #[derive(FromForm, UriDisplayQuery)]
+# struct UserDetails<'r> { age: Option<usize>, nickname: &'r RawStr, }
+
+#[get("/person/<id>?<details..>")]
+fn person(id: usize, details: Option<Form<UserDetails>>) { /* .. */ }
+
+uri!(person: id = 100, details = UserDetails { age: Some(20), nickname: "Bob".into() });
 ```
 
 See the [`FromUriParam`] documentation for further details.
@@ -531,11 +645,11 @@ See the [`FromUriParam`] documentation for further details.
 [`UriPart`]: @api/rocket/http/uri/trait.UriPart.html
 [`Uri`]: @api/rocket/http/uri/enum.Uri.html
 [`Redirect::to()`]: @api/rocket/response/struct.Redirect.html#method.to
-[`uri!`]: @api/rocket_codegen/macro.uri.html
+[`uri!`]: @api/rocket/macro.uri.html
 [`UriDisplay`]: @api/rocket/http/uri/trait.UriDisplay.html
 [`FromUriParam`]: @api/rocket/http/uri/trait.FromUriParam.html
 [`Path`]: @api/rocket/http/uri/enum.Path.html
 [`Query`]: @api/rocket/http/uri/enum.Query.html
 [`Ignorable`]: @api/rocket/http/uri/trait.Ignorable.html
-[`UriDisplayPath`]: @api/rocket_codegen/derive.UriDisplayPath.html
-[`UriDisplayQuery`]: @api/rocket_codegen/derive.UriDisplayQuery.html
+[`UriDisplayPath`]: @api/rocket/derive.UriDisplayPath.html
+[`UriDisplayQuery`]: @api/rocket/derive.UriDisplayQuery.html

@@ -61,7 +61,6 @@ use crate::uri::{Uri, UriPart, Path, Query, Formatter};
 /// the following route:
 ///
 /// ```rust
-/// # #![feature(proc_macro_hygiene)]
 /// # #[macro_use] extern crate rocket;
 /// #[get("/item/<id>?<track>")]
 /// fn get_item(id: i32, track: Option<String>) { /* .. */ }
@@ -70,7 +69,6 @@ use crate::uri::{Uri, UriPart, Path, Query, Formatter};
 /// A URI for this route can be generated as follows:
 ///
 /// ```rust
-/// # #![feature(proc_macro_hygiene)]
 /// # #[macro_use] extern crate rocket;
 /// # type T = ();
 /// # #[get("/item/<id>?<track>")]
@@ -106,7 +104,7 @@ use crate::uri::{Uri, UriPart, Path, Query, Formatter};
 /// seen, the implementations will be used to display the value in a URI-safe
 /// manner.
 ///
-/// [`uri!`]: ../../../rocket_codegen/macro.uri.html
+/// [`uri!`]: ../../../rocket/macro.uri.html
 ///
 /// # Provided Implementations
 ///
@@ -201,11 +199,13 @@ use crate::uri::{Uri, UriPart, Path, Query, Formatter};
 /// As long as every field in the structure (or enum) implements `UriDisplay`,
 /// the trait can be derived. The implementation calls
 /// [`Formatter::write_named_value()`] for every named field and
-/// [`Formatter::write_value()`] for every unnamed field. See the [`UriDisplay`
-/// derive] documentation for full details.
+/// [`Formatter::write_value()`] for every unnamed field. See the
+/// [`UriDisplay<Path>`] and [`UriDisplay<Query>`] derive documentation for full
+/// details.
 ///
 /// [`Ignorable`]: crate::uri::Ignorable
-/// [`UriDisplay` derive]: ../../../rocket_codegen/derive.UriDisplay.html
+/// [`UriDisplay<Path>`]: ../../derive.UriDisplayPath.html
+/// [`UriDisplay<Query>`]: ../../derive.UriDisplayQuery.html
 /// [`Formatter::write_named_value()`]: crate::uri::Formatter::write_named_value()
 /// [`Formatter::write_value()`]: crate::uri::Formatter::write_value()
 ///
@@ -234,7 +234,6 @@ use crate::uri::{Uri, UriPart, Path, Query, Formatter};
 /// `UriDisplay` implementation is required.
 ///
 /// ```rust
-/// # #![feature(proc_macro_hygiene)]
 /// # #[macro_use] extern crate rocket;
 /// use rocket::http::RawStr;
 /// use rocket::request::FromParam;
@@ -432,7 +431,6 @@ impl<T: UriDisplay<Query>, E> UriDisplay<Query> for Result<T, E> {
 /// trait for the corresponding `UriPart`.
 ///
 /// ```rust
-/// # #![feature(proc_macro_hygiene)]
 /// # #[macro_use] extern crate rocket;
 /// #[get("/item/<id>?<track>")]
 /// fn get_item(id: i32, track: Option<u8>) { /* .. */ }

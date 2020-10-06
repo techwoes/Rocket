@@ -2,7 +2,7 @@ use std::fmt::{self, Display};
 use std::borrow::Cow;
 
 use crate::ext::IntoOwned;
-use crate::parse::{Indexed, IndexedStr};
+use crate::parse::{Extent, IndexedStr};
 use crate::uri::{as_utf8_unchecked, Error};
 
 /// A URI with an authority only: `user:pass@host:8000`.
@@ -28,7 +28,7 @@ pub struct Authority<'a> {
 }
 
 #[derive(Debug, Clone)]
-crate enum Host<T> {
+pub(crate) enum Host<T> {
     Bracketed(T),
     Raw(T)
 }
@@ -55,30 +55,30 @@ impl IntoOwned for Authority<'_> {
 }
 
 impl<'a> Authority<'a> {
-    crate unsafe fn raw(
+    pub(crate) unsafe fn raw(
         source: Cow<'a, [u8]>,
-        user_info: Option<Indexed<'a, [u8]>>,
-        host: Host<Indexed<'a, [u8]>>,
+        user_info: Option<Extent<&'a [u8]>>,
+        host: Host<Extent<&'a [u8]>>,
         port: Option<u16>
     ) -> Authority<'a> {
         Authority {
             source: Some(as_utf8_unchecked(source)),
-            user_info: user_info.map(|u| u.coerce()),
-            host: host.map_inner(|inner| inner.coerce()),
+            user_info: user_info.map(IndexedStr::from),
+            host: host.map_inner(IndexedStr::from),
             port: port
         }
     }
 
     #[cfg(test)]
-    crate fn new(
+    pub(crate) fn new(
         user_info: Option<&'a str>,
         host: Host<&'a str>,
         port: Option<u16>
     ) -> Authority<'a> {
         Authority {
             source: None,
-            user_info: user_info.map(|u| u.into()),
-            host: host.map_inner(|inner| inner.into()),
+            user_info: user_info.map(|u| Cow::Borrowed(u).into()),
+            host: host.map_inner(|inner| Cow::Borrowed(inner).into()),
             port: port
         }
     }

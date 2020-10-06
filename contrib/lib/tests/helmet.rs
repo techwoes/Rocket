@@ -1,5 +1,3 @@
-#![feature(proc_macro_hygiene)]
-
 #[macro_use]
 #[cfg(feature = "helmet")]
 extern crate rocket;
@@ -7,7 +5,7 @@ extern crate rocket;
 #[cfg(feature = "helmet")]
 mod helmet_tests {
     use rocket::http::{Status, uri::Uri};
-    use rocket::local::{Client, LocalResponse};
+    use rocket::local::blocking::{Client, LocalResponse};
 
     use rocket_contrib::helmet::*;
     use time::Duration;
@@ -95,13 +93,13 @@ mod helmet_tests {
             assert_header!(
                 response,
                 "Strict-Transport-Security",
-                format!("max-age={}", Duration::weeks(52).num_seconds())
+                format!("max-age={}", Duration::weeks(52).whole_seconds())
             );
 
             assert_header!(
                 response,
                 "Expect-CT",
-                format!("max-age={}, enforce", Duration::days(30).num_seconds())
+                format!("max-age={}, enforce", Duration::days(30).whole_seconds())
             );
 
             assert_header!(response, "Referrer-Policy", "no-referrer");
@@ -128,6 +126,24 @@ mod helmet_tests {
 
             assert_header!(response, "Expect-CT",
                 "max-age=30, enforce, report-uri=\"https://www.google.com\"");
+        });
+    }
+
+    #[test]
+    fn prefetch_test() {
+        let helmet = SpaceHelmet::default().enable(Prefetch::default());
+        dispatch!(helmet, |response: LocalResponse<'_>| {
+            assert_header!(response, "X-DNS-Prefetch-Control", "off");
+        });
+
+        let helmet = SpaceHelmet::default().enable(Prefetch::Off);
+        dispatch!(helmet, |response: LocalResponse<'_>| {
+            assert_header!(response, "X-DNS-Prefetch-Control", "off");
+        });
+
+        let helmet = SpaceHelmet::default().enable(Prefetch::On);
+        dispatch!(helmet, |response: LocalResponse<'_>| {
+            assert_header!(response, "X-DNS-Prefetch-Control", "on");
         });
     }
 }

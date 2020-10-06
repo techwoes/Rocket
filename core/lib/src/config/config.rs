@@ -4,13 +4,13 @@ use std::path::{Path, PathBuf};
 use std::convert::AsRef;
 use std::fmt;
 
+use crate::http::private::cookie::Key;
 use crate::config::Environment::*;
 use crate::config::{Result, ConfigBuilder, Environment, ConfigError, LoggingLevel};
-use crate::config::{Table, Value, Array, Datetime};
-use crate::http::private::Key;
+use crate::config::{FullConfig, Table, Value, Array, Datetime};
+use crate::data::Limits;
 
 use super::custom_values::*;
-use {num_cpus, base64};
 
 /// Structure for Rocket application configuration.
 ///
@@ -49,17 +49,17 @@ pub struct Config {
     /// How much information to log.
     pub log_level: LoggingLevel,
     /// The secret key.
-    crate secret_key: SecretKey,
+    pub(crate) secret_key: SecretKey,
     /// TLS configuration.
-    crate tls: Option<TlsConfig>,
-    /// Streaming read size limits.
+    pub(crate) tls: Option<TlsConfig>,
+    /// Streaming data limits.
     pub limits: Limits,
     /// Extra parameters that aren't part of Rocket's core config.
     pub extras: HashMap<String, Value>,
     /// The path to the configuration file this config was loaded from, if any.
-    crate config_file_path: Option<PathBuf>,
+    pub(crate) config_file_path: Option<PathBuf>,
     /// The path root-relative files will be rooted from.
-    crate root_path: Option<PathBuf>,
+    pub(crate) root_path: Option<PathBuf>,
 }
 
 macro_rules! config_from_raw {
@@ -76,8 +76,56 @@ macro_rules! config_from_raw {
 }
 
 impl Config {
+    /// Reads configuration values from the nearest `Rocket.toml`, searching for
+    /// a file by that name upwards from the current working directory to its
+    /// parents, as well as from environment variables named `ROCKET_{PARAM}` as
+    /// specified in the [`config`](crate::config) module documentation. Returns
+    /// the active configuration.
+    ///
+    /// Specifically, this method:
+    ///
+    ///   1. Locates the nearest `Rocket.toml` configuration file.
+    ///   2. Retrieves the active environment according to
+    ///      [`Environment::active()`].
+    ///   3. Parses and validates the configuration file in its entirety,
+    ///      extracting the values from the active environment.
+    ///   4. Overrides parameters with values set in `ROCKET_{PARAM}`
+    ///      environment variables.
+    ///
+    /// Any error encountered while performing these steps is returned.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # if false {
+    /// let config = rocket::Config::read().unwrap();
+    /// # }
+    /// ```
+    pub fn read() -> Result<Config> {
+        Self::read_from(&FullConfig::find_config_path()?)
+    }
+
+    /// This method is exactly like [`Config::read()`] except it uses the file
+    /// at `path` as the configuration file instead of searching for the nearest
+    /// `Rocket.toml`. The file must have the same format as `Rocket.toml`.
+    ///
+    /// See [`Config::read()`] for more.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # if false {
+    /// let config = rocket::Config::read_from("/var/my-config.toml").unwrap();
+    /// # }
+    /// ```
+    pub fn read_from<P: AsRef<Path>>(path: P) -> Result<Config> {
+        FullConfig::read_from(path.as_ref()).map(FullConfig::take_active)
+    }
+
     /// Returns a builder for `Config` structure where the default parameters
-    /// are set to those of `env`.
+    /// are set to those of `env`. This _does not_ read any configuration
+    /// parameters from any source. See [`config`](crate::config) for a list of
+    /// defaults.
     ///
     /// # Example
     ///
@@ -96,7 +144,12 @@ impl Config {
     }
 
     /// Returns a `Config` with the default parameters for the environment
-    /// `env`. See [`config`](crate::config) for a list of defaults.
+    /// `env`. This _does not_ read any configuration parameters from any
+    /// source. See [`config`](crate::config) for a list of defaults.
+    ///
+    /// # Panics
+    ///
+    /// Panics if randomness cannot be retrieved from the OS.
     ///
     /// # Example
     ///
@@ -107,11 +160,12 @@ impl Config {
     /// my_config.set_port(1001);
     /// ```
     pub fn new(env: Environment) -> Config {
-        Config::default(env)
+        Config::default(env).expect("failed to read randomness from the OS")
     }
 
     /// Returns a `Config` with the default parameters of the active environment
-    /// as determined by the `ROCKET_ENV` environment variable.
+    /// as determined by the `ROCKET_ENV` environment variable. This _does not_
+    /// read any configuration parameters from any source.
     ///
     /// If `ROCKET_ENV` is not set, the returned `Config` uses development
     /// environment parameters when the application was compiled in `debug` mode
@@ -128,9 +182,7 @@ impl Config {
     /// # Example
     ///
     /// ```rust
-    /// use rocket::config::Config;
-    ///
-    /// let mut my_config = Config::active().unwrap();
+    /// let mut my_config = rocket::Config::active().unwrap();
     /// my_config.set_port(1001);
     /// ```
     pub fn active() -> Result<Config> {
@@ -183,19 +235,17 @@ impl Config {
     }
 
     /// Returns the default configuration for the environment `env` given that
-    /// the configuration was stored at `config_file_path`.
+    /// the configuration was stored at `path`. This doesn't read the file at
+    /// `path`; it simply uses `path` to set the config path property in the
+    /// returned `Config`.
     ///
     /// # Error
     ///
     /// Return a `BadFilePath` error if `path` does not have a parent.
-    ///
-    /// # Panics
-    ///
-    /// Panics if randomness cannot be retrieved from the OS.
-    crate fn default_from<P>(env: Environment, path: P) -> Result<Config>
+    pub(crate) fn default_from<P>(env: Environment, path: P) -> Result<Config>
         where P: AsRef<Path>
     {
-        let mut config = Config::default(env);
+        let mut config = Config::default(env)?;
 
         let config_file_path = path.as_ref().to_path_buf();
         if let Some(parent) = config_file_path.parent() {
@@ -210,18 +260,15 @@ impl Config {
     }
 
     /// Returns the default configuration for the environment `env`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if randomness cannot be retrieved from the OS.
-    crate fn default(env: Environment) -> Config {
+    pub(crate) fn default(env: Environment) -> Result<Config> {
         // Note: This may truncate if num_cpus::get() / 2 > u16::max. That's okay.
         let default_workers = (num_cpus::get() * 2) as u16;
 
         // Use a generated secret key by default.
-        let key = SecretKey::Generated(Key::generate());
+        let new_key = Key::try_generate().ok_or(ConfigError::RandFailure)?;
+        let key = SecretKey::Generated(new_key);
 
-        match env {
+        Ok(match env {
             Development => {
                 Config {
                     environment: Development,
@@ -270,13 +317,13 @@ impl Config {
                     root_path: None,
                 }
             }
-        }
+        })
     }
 
     /// Constructs a `BadType` error given the entry `name`, the invalid `val`
     /// at that entry, and the `expect`ed type name.
     #[inline(always)]
-    crate fn bad_type(&self,
+    pub(crate) fn bad_type(&self,
                            name: &str,
                            actual: &'static str,
                            expect: &'static str) -> ConfigError {
@@ -298,9 +345,9 @@ impl Config {
     ///   * **workers**: Integer (16-bit unsigned)
     ///   * **keep_alive**: Integer
     ///   * **log**: String
-    ///   * **secret_key**: String (256-bit base64)
+    ///   * **secret_key**: String (256-bit base64 or base16)
     ///   * **tls**: Table (`certs` (path as String), `key` (path as String))
-    crate fn set_raw(&mut self, name: &str, val: &Value) -> Result<()> {
+    pub(crate) fn set_raw(&mut self, name: &str, val: &Value) -> Result<()> {
         let (id, ok) = (|val| val, |_| Ok(()));
         config_from_raw!(self, name, val,
             address => (str, set_address, id),
@@ -401,9 +448,7 @@ impl Config {
     /// # Example
     ///
     /// ```rust
-    /// use rocket::config::Config;
-    ///
-    /// let mut config = Config::development();
+    /// let mut config = rocket::Config::development();
     ///
     /// // Set keep-alive timeout to 10 seconds.
     /// config.set_keep_alive(10);
@@ -423,12 +468,12 @@ impl Config {
     }
 
     /// Sets the `secret_key` in `self` to `key` which must be a 256-bit base64
-    /// encoded string.
+    /// or base16 (hex) encoded string.
     ///
     /// # Errors
     ///
-    /// If `key` is not a valid 256-bit base64 encoded string, returns a
-    /// `BadType` error.
+    /// If `key` is not a valid 256-bit encoded string, returns a `BadType`
+    /// error.
     ///
     /// # Example
     ///
@@ -436,25 +481,31 @@ impl Config {
     /// use rocket::config::{Config, Environment};
     ///
     /// let mut config = Config::new(Environment::Staging);
+    ///
+    /// // A base64 encoded key.
     /// let key = "8Xui8SN4mI+7egV/9dlfYYLGQJeEx4+DwmSQLwDVXJg=";
     /// assert!(config.set_secret_key(key).is_ok());
+    ///
+    /// // A base16 (hex) encoded key.
+    /// let key = "fe4c5b09a9ac372156e44ce133bc940685ef5e0394d6e9274aadacc21e4f2643";
+    /// assert!(config.set_secret_key(key).is_ok());
+    ///
+    /// // An invalid key.
     /// assert!(config.set_secret_key("hello? anyone there?").is_err());
     /// ```
     pub fn set_secret_key<K: Into<String>>(&mut self, key: K) -> Result<()> {
         let key = key.into();
-        let error = self.bad_type("secret_key", "string",
-                                  "a 256-bit base64 encoded string");
+        let e = self.bad_type("secret_key", "string", "a 256-bit base64 or hex encoded string");
 
-        if key.len() != 44 {
-            return Err(error);
-        }
-
-        let bytes = match base64::decode(&key) {
-            Ok(bytes) => bytes,
-            Err(_) => return Err(error)
+        // `binascii` requires a bit more space than actual output for padding
+        let mut bytes = [0u8; 36];
+        let bytes = match key.len() {
+            44 => binascii::b64decode(key.as_bytes(), &mut bytes).map_err(|_| e)?,
+            64 => binascii::hex2bin(key.as_bytes(), &mut bytes).map_err(|_| e)?,
+            _ => return Err(e)
         };
 
-        self.secret_key = SecretKey::Provided(Key::from_master(&bytes));
+        self.secret_key = SecretKey::Provided(Key::derive_from(&bytes));
         Ok(())
     }
 
@@ -479,10 +530,10 @@ impl Config {
     /// # Example
     ///
     /// ```rust
-    /// use rocket::config::{Config, Limits};
+    /// use rocket::data::{Limits, ToByteUnit};
     ///
-    /// let mut config = Config::development();
-    /// config.set_limits(Limits::default().limit("json", 4 * (1 << 20)));
+    /// let mut config = rocket::Config::development();
+    /// config.set_limits(Limits::default().limit("json", 4.mebibytes()));
     /// ```
     #[inline]
     pub fn set_limits(&mut self, limits: Limits) {
@@ -505,30 +556,28 @@ impl Config {
     /// # Example
     ///
     /// ```rust
-    /// use rocket::config::Config;
-    ///
     /// # use rocket::config::ConfigError;
     /// # fn config_test() -> Result<(), ConfigError> {
-    /// let mut config = Config::development();
+    /// let mut config = rocket::Config::development();
     /// config.set_tls("/etc/ssl/my_certs.pem", "/etc/ssl/priv.key")?;
     /// # Ok(())
     /// # }
     /// ```
     #[cfg(feature = "tls")]
     pub fn set_tls(&mut self, certs_path: &str, key_path: &str) -> Result<()> {
-        use crate::http::tls::util::{self, Error};
+        use crate::http::tls::{load_certs, load_private_key, Error};
 
         let pem_err = "malformed PEM file";
 
         // Load the certificates.
-        let certs = util::load_certs(self.root_relative(certs_path))
+        let certs = load_certs(self.root_relative(certs_path))
             .map_err(|e| match e {
                 Error::Io(e) => ConfigError::Io(e, "tls.certs"),
                 _ => self.bad_type("tls", pem_err, "a valid certificates file")
             })?;
 
         // And now the private key.
-        let key = util::load_private_key(self.root_relative(key_path))
+        let key = load_private_key(self.root_relative(key_path))
             .map_err(|e| match e {
                 Error::Io(e) => ConfigError::Io(e, "tls.key"),
                 _ => self.bad_type("tls", pem_err, "a valid private key file")
@@ -616,7 +665,7 @@ impl Config {
 
     /// Retrieves the secret key from `self`.
     #[inline]
-    crate fn secret_key(&self) -> &Key {
+    pub(crate) fn secret_key(&self) -> &Key {
         self.secret_key.inner()
     }
 

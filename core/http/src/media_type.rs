@@ -4,7 +4,7 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 
 use crate::ext::IntoCollection;
-use crate::uncased::{uncased_eq, UncasedStr};
+use crate::uncased::UncasedStr;
 use crate::parse::{Indexed, IndexedString, parse_media_type};
 
 use smallvec::SmallVec;
@@ -22,18 +22,32 @@ pub enum MediaParams {
     Dynamic(SmallVec<[(IndexedString, IndexedString); 2]>)
 }
 
-impl pear::parsers::Collection for MediaParams {
-    type Item = (IndexedString, IndexedString);
-
-    fn new() -> Self {
+impl Default for MediaParams {
+    fn default() -> Self {
         MediaParams::Dynamic(SmallVec::new())
     }
+}
 
-    fn add(&mut self, item: Self::Item) {
-        match *self {
+impl Extend<(IndexedString, IndexedString)> for MediaParams {
+    fn extend<T: IntoIterator<Item = (IndexedString, IndexedString)>>(&mut self, iter: T) {
+        match self {
             MediaParams::Static(..) => panic!("can't add to static collection!"),
-            MediaParams::Dynamic(ref mut v) => v.push(item)
+            MediaParams::Dynamic(ref mut v) => v.extend(iter)
         }
+    }
+}
+
+impl PartialEq for MediaParams {
+    fn eq(&self, other: &MediaParams) -> bool {
+        #[inline(always)]
+        fn inner_types(params: &MediaParams) -> &[(IndexedString, IndexedString)] {
+            match *params {
+                MediaParams::Static(params) => params,
+                MediaParams::Dynamic(ref vec) => vec,
+            }
+        }
+
+        inner_types(self) == inner_types(other)
     }
 }
 
@@ -196,7 +210,7 @@ macro_rules! from_extension {
         /// ```
         pub fn from_extension(ext: &str) -> Option<MediaType> {
             match ext {
-                $(x if uncased_eq(x, $ext) => Some(MediaType::$name)),*,
+                $(x if uncased::eq(x, $ext) => Some(MediaType::$name)),*,
                 _ => None
             }
         }
@@ -262,7 +276,7 @@ macro_rules! parse_flexible {
         /// ```
         pub fn parse_flexible(name: &str) -> Option<MediaType> {
             match name {
-                $(x if uncased_eq(x, $short) => Some(MediaType::$name)),*,
+                $(x if uncased::eq(x, $short) => Some(MediaType::$name)),*,
                 _ => MediaType::from_str(name).ok(),
             }
         }

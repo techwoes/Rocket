@@ -1,6 +1,8 @@
 use std::ops::RangeBounds;
 
-use proc_macro::{Span, Diagnostic, Literal};
+use devise::Diagnostic;
+
+use crate::proc_macro2::{Span, Literal};
 
 pub type PResult<T> = std::result::Result<T, Diagnostic>;
 
@@ -27,7 +29,8 @@ impl Diagnostics {
         let mut iter = self.0.into_iter();
         let mut last = iter.next().expect("Diagnostic::emit_head empty");
         for diag in iter {
-            last.emit();
+            // FIXME(diag: emit, can there be errors here?)
+            last.emit_as_item_tokens();
             last = diag;
         }
 
@@ -63,7 +66,7 @@ impl From<Vec<Diagnostic>> for Diagnostics {
 
 use std::ops::Deref;
 
-pub struct StringLit(crate String, crate Literal);
+pub struct StringLit(pub String, pub Literal);
 
 impl Deref for StringLit {
     type Target = str;
@@ -86,7 +89,8 @@ impl StringLit {
     }
 
     /// Attempt to obtain a subspan, or, failing that, produce the full span.
-    /// This will create suboptimal diagnostics, but better than failing to build entirely.
+    /// This will create suboptimal diagnostics, but better than failing to
+    /// build entirely.
     pub fn subspan<R: RangeBounds<usize>>(&self, range: R) -> Span {
         self.1.subspan(range).unwrap_or_else(|| self.span())
     }
