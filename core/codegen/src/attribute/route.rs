@@ -7,13 +7,13 @@ use devise::ext::{SpanDiagnosticExt, TypeExt};
 use indexmap::IndexSet;
 
 use crate::proc_macro_ext::{Diagnostics, StringLit};
-use crate::syn_ext::IdentExt;
+use crate::syn_ext::{IdentExt, NameSource};
 use crate::proc_macro2::{TokenStream, Span};
 use crate::http_codegen::{Method, MediaType, RoutePath, DataSegment, Optional};
 use crate::attribute::segments::{Source, Kind, Segment};
 use crate::syn::{Attribute, parse::Parser};
 
-use crate::{ROUTE_FN_PREFIX, ROUTE_STRUCT_PREFIX, URI_MACRO_PREFIX, ROCKET_PARAM_PREFIX};
+use crate::{URI_MACRO_PREFIX, ROCKET_PARAM_PREFIX};
 
 /// The raw, parsed `#[route]` attribute.
 #[derive(Debug, FromMeta)]
@@ -45,10 +45,10 @@ struct Route {
     function: syn::ItemFn,
     /// The non-static parameters declared in the route segments.
     segments: IndexSet<Segment>,
-    /// The parsed inputs to the user's function. The first ident is the ident
-    /// as the user wrote it, while the second ident is the identifier that
-    /// should be used during code generation, the `rocket_ident`.
-    inputs: Vec<(syn::Ident, syn::Ident, syn::Type)>,
+    /// The parsed inputs to the user's function. The name is the param as the
+    /// user wrote it, while the ident is the identifier that should be used
+    /// during code generation, the `rocket_ident`.
+    inputs: Vec<(NameSource, syn::Ident, syn::Type)>,
 }
 
 fn parse_route(attr: RouteAttribute, function: syn::ItemFn) -> Result<Route> {
@@ -66,23 +66,23 @@ fn parse_route(attr: RouteAttribute, function: syn::ItemFn) -> Result<Route> {
         }
     }
 
-    // Collect all of the dynamic segments in an `IndexSet`, checking for dups.
+    // Collect non-wild dynamic segments in an `IndexSet`, checking for dups.
     let mut segments: IndexSet<Segment> = IndexSet::new();
-    fn dup_check<I>(set: &mut IndexSet<Segment>, iter: I, diags: &mut Diagnostics)
-        where I: Iterator<Item = Segment>
+    fn dup_check<'a, I>(set: &mut IndexSet<Segment>, iter: I, diags: &mut Diagnostics)
+        where I: Iterator<Item = &'a Segment>
     {
-        for segment in iter.filter(|s| s.kind != Kind::Static) {
+        for segment in iter.filter(|s| s.is_dynamic()) {
             let span = segment.span;
-            if let Some(previous) = set.replace(segment) {
+            if let Some(previous) = set.replace(segment.clone()) {
                 diags.push(span.error(format!("duplicate parameter: `{}`", previous.name))
                     .span_note(previous.span, "previous parameter with the same name here"))
             }
         }
     }
 
-    dup_check(&mut segments, attr.path.path.iter().cloned(), &mut diags);
-    attr.path.query.as_ref().map(|q| dup_check(&mut segments, q.iter().cloned(), &mut diags));
-    dup_check(&mut segments, attr.data.clone().map(|s| s.value.0).into_iter(), &mut diags);
+    dup_check(&mut segments, attr.path.path.iter().filter(|s| !s.is_wild()), &mut diags);
+    attr.path.query.as_ref().map(|q| dup_check(&mut segments, q.iter(), &mut diags));
+    dup_check(&mut segments, attr.data.as_ref().map(|s| &s.value.0).into_iter(), &mut diags);
 
     // Check the validity of function arguments.
     let mut inputs = vec![];
@@ -110,7 +110,7 @@ fn parse_route(attr: RouteAttribute, function: syn::ItemFn) -> Result<Route> {
         };
 
         let rocket_ident = ident.prepend(ROCKET_PARAM_PREFIX);
-        inputs.push((ident.clone(), rocket_ident, ty.with_stripped_lifetimes()));
+        inputs.push((ident.clone().into(), rocket_ident, ty.with_stripped_lifetimes()));
         fn_segments.insert(ident.into());
     }
 
@@ -207,10 +207,9 @@ fn query_exprs(route: &Route) -> Option<TokenStream> {
     let query_segments = route.attribute.path.query.as_ref()?;
     let (mut decls, mut matchers, mut builders) = (vec![], vec![], vec![]);
     for segment in query_segments {
-        let name = &segment.name;
         let (ident, ty, span) = if segment.kind != Kind::Static {
             let (ident, ty) = route.inputs.iter()
-                .find(|(ident, _, _)| ident == &segment.name)
+                .find(|(name, _, _)| name == &segment.name)
                 .map(|(_, rocket_ident, ty)| (rocket_ident, ty))
                 .unwrap();
 
@@ -232,6 +231,7 @@ fn query_exprs(route: &Route) -> Option<TokenStream> {
             Kind::Static => quote!()
         };
 
+        let name = segment.name.name();
         let matcher = match segment.kind {
             Kind::Single => quote_spanned! { span =>
                 (_, #name, __v) => {
@@ -327,8 +327,9 @@ fn generate_internal_uri_macro(route: &Route) -> TokenStream {
         .filter(|seg| seg.source == Source::Path || seg.source == Source::Query)
         .filter(|seg| seg.kind != Kind::Static)
         .map(|seg| &seg.name)
-        .map(|name| route.inputs.iter().find(|(ident, ..)| ident == name).unwrap())
-        .map(|(ident, _, ty)| quote!(#ident: #ty));
+        .map(|seg_name| route.inputs.iter().find(|(in_name, ..)| in_name == seg_name).unwrap())
+        .map(|(name, _, ty)| (name.ident(), ty))
+        .map(|(ident, ty)| quote!(#ident: #ty));
 
     let mut hasher = DefaultHasher::new();
     route.function.sig.ident.hash(&mut hasher);
@@ -385,8 +386,8 @@ fn codegen_route(route: Route) -> Result<TokenStream> {
     let mut data_stmt = None;
     let mut req_guard_definitions = vec![];
     let mut parameter_definitions = vec![];
-    for (ident, rocket_ident, ty) in &route.inputs {
-        let fn_segment: Segment = ident.into();
+    for (name, rocket_ident, ty) in &route.inputs {
+        let fn_segment: Segment = name.ident().into();
         match route.segments.get(&fn_segment) {
             Some(seg) if seg.source == Source::Path => {
                 parameter_definitions.push(param_expr(seg, rocket_ident, &ty));
@@ -408,11 +409,9 @@ fn codegen_route(route: Route) -> Result<TokenStream> {
     }
 
     // Gather everything we need.
-    define_vars_and_mods!(req, data, _Box, Request, Data, StaticRouteInfo, HandlerFuture);
+    define_vars_and_mods!(req, data, _Box, Request, Data, Route, StaticRouteInfo, HandlerFuture);
     let (vis, user_handler_fn) = (&route.function.vis, &route.function);
     let user_handler_fn_name = &user_handler_fn.sig.ident;
-    let generated_fn_name = user_handler_fn_name.prepend(ROUTE_FN_PREFIX);
-    let generated_struct_name = user_handler_fn_name.prepend(ROUTE_STRUCT_PREFIX);
     let generated_internal_uri_macro = generate_internal_uri_macro(&route);
     let generated_respond_expr = generate_respond_expr(&route);
 
@@ -424,36 +423,48 @@ fn codegen_route(route: Route) -> Result<TokenStream> {
     Ok(quote! {
         #user_handler_fn
 
-        /// Rocket code generated wrapping route function.
         #[doc(hidden)]
-        #vis fn #generated_fn_name<'_b>(
-            #req: &'_b #Request,
-            #data: #Data
-        ) -> #HandlerFuture<'_b> {
-            #_Box::pin(async move {
-                #(#req_guard_definitions)*
-                #(#parameter_definitions)*
-                #data_stmt
+        #[allow(non_camel_case_types)]
+        /// Rocket code generated proxy structure.
+        #vis struct #user_handler_fn_name {  }
 
-                #generated_respond_expr
-            })
+        /// Rocket code generated proxy static conversion implementation.
+        impl From<#user_handler_fn_name> for #StaticRouteInfo {
+            fn from(_: #user_handler_fn_name) -> #StaticRouteInfo {
+                fn monomorphized_function<'_b>(
+                    #req: &'_b #Request,
+                    #data: #Data
+                ) -> #HandlerFuture<'_b> {
+                    #_Box::pin(async move {
+                        #(#req_guard_definitions)*
+                        #(#parameter_definitions)*
+                        #data_stmt
+
+                        #generated_respond_expr
+                    })
+                }
+
+                #StaticRouteInfo {
+                    name: stringify!(#user_handler_fn_name),
+                    method: #method,
+                    path: #path,
+                    handler: monomorphized_function,
+                    format: #format,
+                    rank: #rank,
+                }
+            }
+        }
+
+        /// Rocket code generated proxy conversion implementation.
+        impl From<#user_handler_fn_name> for #Route {
+            #[inline]
+            fn from(_: #user_handler_fn_name) -> #Route {
+                #StaticRouteInfo::from(#user_handler_fn_name {}).into()
+            }
         }
 
         /// Rocket code generated wrapping URI macro.
         #generated_internal_uri_macro
-
-        /// Rocket code generated static route info.
-        #[doc(hidden)]
-        #[allow(non_upper_case_globals)]
-        #vis static #generated_struct_name: #StaticRouteInfo =
-            #StaticRouteInfo {
-                name: stringify!(#user_handler_fn_name),
-                method: #method,
-                path: #path,
-                handler: #generated_fn_name,
-                format: #format,
-                rank: #rank,
-            };
     }.into())
 }
 

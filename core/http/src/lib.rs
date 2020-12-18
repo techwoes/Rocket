@@ -49,21 +49,17 @@ pub mod uncased {
     #[doc(inline)] pub use uncased::*;
 }
 
+// Types that we expose for use by core.
 #[doc(hidden)]
 pub mod private {
-    // We need to export these for codegen, but otherwise it's unnecessary.
-    // TODO: Expose a `const fn` from ContentType when possible. (see RFC#1817)
     pub use crate::parse::Indexed;
-    pub use crate::media_type::{MediaParams, Source};
     pub use smallvec::{SmallVec, Array};
 
-    // These we need to expose for core.
     pub mod cookie {
         pub use cookie::*;
         pub use crate::cookies::Key;
     }
 
-    // These as well.
     pub use crate::listener::{Incoming, Listener, Connection, bind_tcp};
 }
 
@@ -74,4 +70,4 @@ pub use crate::status::{Status, StatusClass};
 pub use crate::header::{Header, HeaderMap};
 pub use crate::raw_str::RawStr;
 pub use crate::media_type::MediaType;
-pub use crate::cookies::{Cookie, CookieJar, CookieCrumb, SameSite};
+pub use crate::cookies::{Cookie, CookieJar, SameSite};

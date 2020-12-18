@@ -1,6 +1,6 @@
 #![recursion_limit="128"]
 
-#![doc(html_root_url = "https://api.rocket.rs/v0.5")]
+#![doc(html_root_url = "https://api.rocket.rs/master")]
 #![doc(html_favicon_url = "https://rocket.rs/images/favicon.ico")]
 #![doc(html_logo_url = "https://rocket.rs/images/logo-boxed.png")]
 
@@ -11,7 +11,7 @@
 //! This crate implements the code generation portions of Rocket. This includes
 //! custom derives, custom attributes, and procedural macros. The documentation
 //! here is purely technical. The code generation facilities are documented
-//! thoroughly in the [Rocket programming guide](https://rocket.rs/v0.5/guide).
+//! thoroughly in the [Rocket programming guide](https://rocket.rs/master/guide).
 //!
 //! # Usage
 //!
@@ -92,6 +92,9 @@ vars_and_mods! {
     Response => rocket::response::Response,
     Data => rocket::data::Data,
     StaticRouteInfo => rocket::StaticRouteInfo,
+    StaticCatcherInfo => rocket::StaticCatcherInfo,
+    Route => rocket::Route,
+    Catcher => rocket::Catcher,
     SmallVec => rocket::http::private::SmallVec,
     Status => rocket::http::Status,
     HandlerFuture => rocket::handler::HandlerFuture,
@@ -123,10 +126,6 @@ use crate::http::Method;
 use proc_macro::TokenStream;
 use devise::{proc_macro2, syn};
 
-static ROUTE_STRUCT_PREFIX: &str = "static_rocket_route_info_for_";
-static CATCH_STRUCT_PREFIX: &str = "static_rocket_catch_info_for_";
-static CATCH_FN_PREFIX: &str = "rocket_catch_fn_";
-static ROUTE_FN_PREFIX: &str = "rocket_route_fn_";
 static URI_MACRO_PREFIX: &str = "rocket_uri_macro_";
 static ROCKET_PARAM_PREFIX: &str = "__rocket_param_";
 
@@ -923,24 +922,34 @@ pub fn catchers(input: TokenStream) -> TokenStream {
 /// # fn person(name: String, age: Option<u8>) { }
 /// #
 /// // with unnamed parameters, in route path declaration order
-/// let mike = uri!(person: "Mike Smith", 28);
+/// let mike = uri!(person: "Mike Smith", Some(28));
 /// assert_eq!(mike.to_string(), "/person/Mike%20Smith?age=28");
 ///
 /// // with named parameters, order irrelevant
-/// let mike = uri!(person: name = "Mike", age = 28);
-/// let mike = uri!(person: age = 28, name = "Mike");
+/// let mike = uri!(person: name = "Mike", age = Some(28));
+/// let mike = uri!(person: age = Some(28), name = "Mike");
 /// assert_eq!(mike.to_string(), "/person/Mike?age=28");
 ///
 /// // with a specific mount-point
-/// let mike = uri!("/api", person: name = "Mike", age = 28);
+/// let mike = uri!("/api", person: name = "Mike", age = Some(28));
 /// assert_eq!(mike.to_string(), "/api/person/Mike?age=28");
 ///
 /// // with unnamed values ignored
 /// let mike = uri!(person: "Mike", _);
 /// assert_eq!(mike.to_string(), "/person/Mike");
 ///
+/// // with unnamed values, explicitly `None`.
+/// let option: Option<u8> = None;
+/// let mike = uri!(person: "Mike", option);
+/// assert_eq!(mike.to_string(), "/person/Mike");
+///
 /// // with named values ignored
 /// let mike = uri!(person: name = "Mike", age = _);
+/// assert_eq!(mike.to_string(), "/person/Mike");
+///
+/// // with named values, explicitly `None`
+/// let option: Option<u8> = None;
+/// let mike = uri!(person: name = "Mike", age = option);
 /// assert_eq!(mike.to_string(), "/person/Mike");
 /// ```
 ///

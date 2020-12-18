@@ -1,5 +1,5 @@
 use std::fmt::Debug;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use futures::future::BoxFuture;
 
@@ -152,6 +152,11 @@ impl<S, E> IntoOutcome<S, (Status, E), ()> for Result<S, E> {
 ///
 ///     Extracts the [`ContentType`] from the incoming request. If the request
 ///     didn't specify a Content-Type, the request is forwarded.
+///
+///   * **IpAddr**
+///
+///     Extracts the client ip address of the incoming request as an [`IpAddr`].
+///     If the client's IP address is not known, the request is forwarded.
 ///
 ///   * **SocketAddr**
 ///
@@ -364,7 +369,7 @@ impl<S, E> IntoOutcome<S, (Status, E), ()> for Result<S, E> {
 /// Notice that these request guards provide access to *borrowed* data (`&'a
 /// User` and `Admin<'a>`) as the data is now owned by the request's cache.
 ///
-/// [request-local state]: https://rocket.rs/v0.5/guide/state/#request-local-state
+/// [request-local state]: https://rocket.rs/master/guide/state/#request-local-state
 #[crate::async_trait]
 pub trait FromRequest<'a, 'r>: Sized {
     /// The associated error to be returned if derivation fails.
@@ -437,6 +442,18 @@ impl<'a, 'r> FromRequest<'a, 'r> for &'a ContentType {
     async fn from_request(request: &'a Request<'r>) -> Outcome<Self, Self::Error> {
         match request.content_type() {
             Some(content_type) => Success(content_type),
+            None => Forward(())
+        }
+    }
+}
+
+#[crate::async_trait]
+impl<'a, 'r> FromRequest<'a, 'r> for IpAddr {
+    type Error = std::convert::Infallible;
+
+    async fn from_request(request: &'a Request<'r>) -> Outcome<Self, Self::Error> {
+        match request.client_ip() {
+            Some(addr) => Success(addr),
             None => Forward(())
         }
     }
